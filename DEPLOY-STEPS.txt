@@ -1,0 +1,18 @@
+TYCOON EMPIRE — ANDROID DEPLOYMENT CHECKLIST
+
+1. Create a new GitHub repository: tycoon-empire-server
+2. Upload everything INSIDE this folder to the repository root.
+3. On Render: New -> Web Service -> connect the GitHub repository.
+4. Build Command: npm install
+5. Start Command: npm start
+6. Health Check Path: /health
+7. Deploy.
+8. Test: https://YOUR-SERVICE.onrender.com/health
+
+After the public API works, change the APK/frontend API base URL from
+http://127.0.0.1:8080
+to your HTTPS Render URL.
+
+WARNING: current prototype persistence is JSON and is not durable across
+Render filesystem resets. Upgrade the database layer to PostgreSQL before
+using it as a permanent production game backend.
