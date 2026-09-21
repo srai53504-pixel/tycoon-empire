@@ -2,111 +2,76 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import {URL} from 'node:url';
 import {getDb,nextId,save} from './db.js';
-
-const PORT=Number(process.env.PORT||8080), HOST=process.env.HOST||'0.0.0.0';
-const ONLINE_MS=30000;
-const BUSINESS_TYPES=[
-  {type:'shop',name:'Retail Shop',price:10000,income:300},
-  {type:'factory',name:'Factory',price:50000,income:1800},
-  {type:'tech',name:'Tech Company',price:150000,income:6500},
-  {type:'bank',name:'Private Bank',price:500000,income:24000}
+const PORT=Number(process.env.PORT||8080),HOST=process.env.HOST||'0.0.0.0',ONLINE_MS=30000,CYCLE=60000;
+const BUSINESS=[
+ {type:'shop',category:'business',name:'Retail Shop',price:10000,income:300},
+ {type:'factory',category:'business',name:'Factory',price:50000,income:1800},
+ {type:'tech',category:'business',name:'Tech Company',price:150000,income:6500},
+ {type:'bank',category:'business',name:'Private Bank',price:500000,income:24000},
+ {type:'mall',category:'business',name:'Shopping Mall',price:1500000,income:80000},
+ {type:'hotel',category:'business',name:'Hotel',price:3000000,income:160000}
 ];
-
-function json(res,status,body){
-  const out=JSON.stringify(body);
-  res.writeHead(status,{
-    'Content-Type':'application/json; charset=utf-8',
-    'Content-Length':Buffer.byteLength(out),
-    'Access-Control-Allow-Origin':'*',
-    'Access-Control-Allow-Headers':'Content-Type, Authorization',
-    'Access-Control-Allow-Methods':'GET,POST,OPTIONS'
-  });res.end(out);
-}
+const TRANSPORT=[
+ {type:'taxi',category:'transport',name:'Taxi',price:100,income:2},{type:'bus',category:'transport',name:'Bus',price:150,income:4},{type:'train',category:'transport',name:'Train',price:250,income:8},{type:'limousine',category:'transport',name:'VIP Limousine',price:500,income:18},{type:'passenger_plane',category:'transport',name:'Passenger Plane',price:800,income:35},{type:'cargo_plane',category:'transport',name:'Cargo Plane',price:1200,income:60},{type:'cargo_ship',category:'transport',name:'Cargo Ship',price:3000,income:120}];
+const CONCESSIONS=[{type:'ground',name:'Ground Transport',price:25000},{type:'commerce',name:'Commerce',price:30000},{type:'leisure',name:'Leisure',price:75000},{type:'air',name:'Air Lines',price:150000},{type:'sea',name:'Sea Lines',price:400000},{type:'realestate',name:'Real Estate',price:800000}];
+const SUBS=[{type:'mining_company',name:'Mining Company',price:15000,income:500},{type:'travel',name:'Traveling Company',price:45000,income:1200},{type:'soccer',name:'Soccer Team',price:30000,income:800},{type:'brokerage',name:'Brokerage Company',price:300000,income:9000},{type:'robotics',name:'Robotics Program',price:350000,income:12000},{type:'nuclear',name:'Nuclear Program',price:1000000,income:30000}];
+const ASSETS=[...BUSINESS,...TRANSPORT,...CONCESSIONS.map(x=>({...x,category:'concession',income:0})),...SUBS.map(x=>({...x,category:'subsidiary'}))];
+const SITES=[['Peru Copper','Copper',-9.19,-75.02,18],['Brazil Iron','Iron',-14.24,-51.93,25],['Indonesia Nickel','Nickel',-2.55,118.01,22],['Australia Gold','Gold',-25.27,133.78,30],['Canada Timber','Timber',56.13,-106.35,20],['South Africa Platinum','Platinum',-30.56,22.94,32],['Chile Lithium','Lithium',-24.72,-69.25,35],['India Bauxite','Bauxite',20.59,78.96,16]];
+function json(res,status,body){const out=JSON.stringify(body);res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Content-Length':Buffer.byteLength(out),'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Content-Type, Authorization','Access-Control-Allow-Methods':'GET,POST,OPTIONS'});res.end(out)}
 function readBody(req){return new Promise((resolve,reject)=>{let d='';req.on('data',c=>{d+=c;if(d.length>1000000)req.destroy()});req.on('end',()=>{if(!d)return resolve({});try{resolve(JSON.parse(d))}catch{resolve(Object.fromEntries(new URLSearchParams(d)))}});req.on('error',reject)})}
-const hash=p=>crypto.createHash('sha256').update(String(p)).digest('hex');
-const cleanEmail=x=>String(x||'').trim().toLowerCase();
-const now=()=>Date.now();
-const token=()=>crypto.randomBytes(24).toString('hex');
-function auth(req){const t=(req.headers.authorization||'').replace(/^Bearer\s+/i,'');return getDb().sessions.find(s=>s.token===t)}
+const hash=p=>crypto.createHash('sha256').update(String(p)).digest('hex');const cleanEmail=x=>String(x||'').trim().toLowerCase();const now=()=>Date.now();const token=()=>crypto.randomBytes(32).toString('hex');
+function auth(req){const t=(req.headers.authorization||'').replace(/^Bearer\s+/i,'').trim();return getDb().sessions.find(s=>s.token===t)}
 function me(req){const s=auth(req);return s?getDb().players.find(p=>p.id===s.playerId):null}
 function pub(p){if(!p)return null;const {passwordHash,...x}=p;return x}
-function playerRanks(){return [...getDb().players].sort((a,b)=>(b.netWorth||0)-(a.netWorth||0)).map((p,i)=>({rank:i+1,...pub(p)}))}
-function companyRanks(){return [...getDb().companies].sort((a,b)=>(b.value||0)-(a.value||0)).map((c,i)=>({rank:i+1,...c}))}
-function onlinePlayers(){const cutoff=now()-ONLINE_MS;return getDb().players.filter(p=>(p.lastActive||0)>=cutoff).map(p=>({id:p.id,username:p.username,country:p.country,netWorth:p.netWorth||0})).sort((a,b)=>b.netWorth-a.netWorth)}
-function addEvent(type,message,playerId=null){const db=getDb();db.events ||= [];db.events.push({id:nextId('event'),type,message,playerId,createdAt:now()});if(db.events.length>200)db.events=db.events.slice(-200);save()}
-function ensureDb(){const db=getDb();db.events ||= [];db.counters ||= {};for(const k of ['player','company','business','contract','alliance','war','chat','event'])db.counters[k] ||= 1;for(const p of db.players){p.lastActive ||= 0;p.netWorth ??= p.money ?? 0;p.money ??= 0;p.army ??= 0;p.country ||= 'IN';}for(const b of db.businesses){b.incomePerCycle=Number(b.incomePerCycle||0);b.lastCollected ||= b.createdAt||now();}save()}
-function accrue(player){
-  const db=getDb();let total=0;const t=now();
-  for(const b of db.businesses.filter(x=>x.ownerId===player.id)){
-    const rate=Math.max(0,Number(b.incomePerCycle)||0);
-    const elapsed=Math.max(0,t-(b.lastIncomeAt||b.createdAt||t));
-    const cycles=Math.floor(elapsed/60000);
-    if(cycles>0){const gain=rate*cycles;player.money+=gain;player.netWorth+=gain;b.lastIncomeAt=(b.lastIncomeAt||b.createdAt||t)+cycles*60000;total+=gain;}
-  }
-  if(total) save();
-  return total;
-}
-
-async function route(req,res){
-  const u=new URL(req.url,`http://${req.headers.host}`),p=u.pathname,m=req.method,b=await readBody(req),db=getDb();
-  if(m==='OPTIONS')return json(res,200,{ok:true});
-  if(m==='GET'&&p==='/health')return json(res,200,{ok:true,service:'tycoon-private-server',version:'0.3.0',time:now(),online:onlinePlayers().length});
-
-  if(m==='POST'&&p==='/api/auth/register'){
-    const email=cleanEmail(b.email),password=String(b.password||''),username=String(b.username||email.split('@')[0]).trim().slice(0,32),country=String(b.country||'IN').trim().slice(0,3).toUpperCase(),companyName=String(b.company_name||b.companyName||`${username} Industries`).trim().slice(0,64);
-    if(!email||password.length<4)return json(res,400,{ok:false,error:'email and password (4+ chars) required'});
-    if(db.players.some(x=>x.email===email))return json(res,409,{ok:false,error:'account exists'});
-    if(db.players.some(x=>x.username?.toLowerCase()===username.toLowerCase()))return json(res,409,{ok:false,error:'username already exists'});
-    const id=nextId('player'),pl={id,email,username,country,companyId:null,allianceId:null,money:100000,netWorth:100000,army:0,createdAt:now(),lastActive:now(),passwordHash:hash(password)};
-    db.players.push(pl);const c={id:nextId('company'),ownerId:id,name:companyName,value:100000,cash:100000,level:1,patriotism:0,createdAt:now()};db.companies.push(c);pl.companyId=c.id;
-    const t=token();db.sessions.push({token:t,playerId:id,createdAt:now()});save();addEvent('join',`${username} joined the empire` ,id);
-    return json(res,201,{ok:true,token:t,player:pub(pl),company:c});
-  }
-  if(m==='POST'&&p==='/api/auth/login'){
-    const email=cleanEmail(b.email),pl=db.players.find(x=>x.email===email);if(!pl||pl.passwordHash!==hash(b.password||''))return json(res,401,{ok:false,error:'invalid credentials'});
-    pl.lastActive=now();const t=token();db.sessions.push({token:t,playerId:pl.id,createdAt:now()});save();return json(res,200,{ok:true,token:t,player:pub(pl)});
-  }
-  if(m==='POST'&&p==='/api/auth/logout'){const s=auth(req);if(s){const pl=db.players.find(x=>x.id===s.playerId);if(pl)pl.lastActive=0}const t=(req.headers.authorization||'').replace(/^Bearer\s+/i,'');db.sessions=db.sessions.filter(s=>s.token!==t);save();return json(res,200,{ok:true})}
-
-  if(p.startsWith('/api/')&&!me(req)&&!['/api/rankings/global','/api/rankings/company','/api/players/online','/api/events','/api/businesses/catalog'].includes(p))return json(res,401,{ok:false,error:'authentication required'});
-  const player=me(req);
-  if(player){player.lastActive=now();accrue(player);}
-
-  if(m==='GET'&&p==='/api/players/me')return json(res,200,{ok:true,player:pub(player),company:db.companies.find(c=>c.id===player.companyId)||null,alliance:db.alliances.find(a=>a.id===player.allianceId)||null});
-  if(m==='POST'&&p==='/api/players/me'){if(b.country!==undefined)player.country=String(b.country).trim().slice(0,3).toUpperCase();if(b.username!==undefined){const u2=String(b.username).trim().slice(0,32);if(u2.length<2)return json(res,400,{ok:false,error:'username too short'});if(db.players.some(x=>x.id!==player.id&&x.username.toLowerCase()===u2.toLowerCase()))return json(res,409,{ok:false,error:'username already exists'});player.username=u2}save();return json(res,200,{ok:true,player:pub(player)})}
-  if(m==='GET'&&p==='/api/players/online')return json(res,200,{ok:true,count:onlinePlayers().length,players:onlinePlayers()});
-
-  if(m==='POST'&&p==='/api/heartbeat'){player.lastActive=now();save();return json(res,200,{ok:true,serverTime:now(),online:onlinePlayers().length})}
-
-  if(m==='POST'&&p==='/api/companies'){if(player.companyId)return json(res,409,{ok:false,error:'player already owns a company'});const name=String(b.name||'Company').trim().slice(0,64);if(name.length<2)return json(res,400,{ok:false,error:'company name too short'});if(db.companies.some(x=>x.name.toLowerCase()===name.toLowerCase()))return json(res,409,{ok:false,error:'company name already exists'});const c={id:nextId('company'),ownerId:player.id,name,value:100000,cash:100000,level:1,patriotism:0,createdAt:now()};db.companies.push(c);player.companyId=c.id;save();addEvent('company',`${player.username} created ${name}`,player.id);return json(res,201,{ok:true,company:c})}
-  if(m==='GET'&&p.startsWith('/api/companies/')){const c=db.companies.find(x=>x.id===Number(p.split('/').pop()));return c?json(res,200,{ok:true,company:c}):json(res,404,{ok:false,error:'company not found'})}
-  if(m==='POST'&&/^\/api\/companies\/\d+\/upgrade$/.test(p)){const c=db.companies.find(x=>x.id===Number(p.split('/')[3]));if(!c||c.ownerId!==player.id)return json(res,403,{ok:false,error:'not owner'});const cost=c.level*25000;if(c.cash<cost||player.money<cost)return json(res,400,{ok:false,error:'insufficient cash'});c.cash-=cost;player.money-=cost;c.level++;c.value+=cost*2;player.netWorth=Math.max(player.netWorth,c.value+player.money);save();addEvent('company',`${player.username} upgraded ${c.name} to level ${c.level}`,player.id);return json(res,200,{ok:true,company:c,player:pub(player)})}
-
-  if(m==='GET'&&p==='/api/businesses/catalog')return json(res,200,{ok:true,businesses:BUSINESS_TYPES});
-  if(m==='GET'&&p==='/api/businesses')return json(res,200,{ok:true,businesses:db.businesses.filter(x=>x.ownerId===player.id)});
-  if(m==='POST'&&p==='/api/businesses/buy'){
-    const type=String(b.type||'shop');const spec=BUSINESS_TYPES.find(x=>x.type===type);if(!spec)return json(res,400,{ok:false,error:'unknown business type'});if(player.money<spec.price)return json(res,400,{ok:false,error:'insufficient funds'});
-    const x={id:nextId('business'),ownerId:player.id,name:spec.name,type:spec.type,purchasePrice:spec.price,incomePerCycle:spec.income,createdAt:now(),lastIncomeAt:now()};player.money-=spec.price;db.businesses.push(x);player.netWorth=Math.max(player.netWorth,player.money+db.companies.find(c=>c.id===player.companyId)?.value||player.netWorth);save();addEvent('business',`${player.username} bought a ${spec.name}`,player.id);return json(res,201,{ok:true,business:x,player:pub(player)})
-  }
-  if(m==='POST'&&p==='/api/businesses/collect'){const total=accrue(player);return json(res,200,{ok:true,collected:total,player:pub(player)})}
-  if(m==='POST'&&p==='/api/businesses/sell'){const x=db.businesses.find(x=>x.id===Number(b.id)&&x.ownerId===player.id);if(!x)return json(res,404,{ok:false,error:'business not found'});const refund=Math.floor(x.purchasePrice*.8);player.money+=refund;db.businesses=db.businesses.filter(y=>y!==x);save();addEvent('business',`${player.username} sold a ${x.name}`,player.id);return json(res,200,{ok:true,refund,player:pub(player)})}
-
-  if(m==='POST'&&p==='/api/contracts'){const x={id:nextId('contract'),ownerId:player.id,title:String(b.title||'Contract'),reward:Number(b.reward||5000),status:'running',createdAt:now()};db.contracts.push(x);save();return json(res,201,{ok:true,contract:x})}
-  if(m==='GET'&&p==='/api/contracts')return json(res,200,{ok:true,contracts:db.contracts});
-  if(m==='POST'&&p==='/api/alliances'){const name=String(b.name||'Alliance').trim().slice(0,64);if(db.alliances.some(a=>a.name.toLowerCase()===name.toLowerCase()))return json(res,409,{ok:false,error:'alliance name exists'});const a={id:nextId('alliance'),name,leaderId:player.id,createdAt:now()};db.alliances.push(a);db.allianceMembers.push({allianceId:a.id,playerId:player.id,role:'leader'});player.allianceId=a.id;save();addEvent('alliance',`${player.username} founded ${name}`,player.id);return json(res,201,{ok:true,alliance:a})}
-  if(m==='POST'&&p==='/api/alliances/join'){const a=db.alliances.find(x=>x.id===Number(b.allianceId));if(!a)return json(res,404,{ok:false,error:'alliance not found'});if(!db.allianceMembers.some(x=>x.allianceId===a.id&&x.playerId===player.id))db.allianceMembers.push({allianceId:a.id,playerId:player.id,role:'member'});player.allianceId=a.id;save();addEvent('alliance',`${player.username} joined ${a.name}`,player.id);return json(res,200,{ok:true,alliance:a})}
-  if(m==='GET'&&p==='/api/alliances')return json(res,200,{ok:true,alliances:db.alliances,members:db.allianceMembers});
-
-  if(m==='POST'&&p==='/api/chat'){const text=String(b.text??b.message??'').trim().slice(0,500);if(!text)return json(res,400,{ok:false,error:'message required'});const x={id:nextId('chat'),playerId:player.id,username:player.username,text,createdAt:now()};db.chat.push(x);if(db.chat.length>200)db.chat=db.chat.slice(-200);save();return json(res,201,{ok:true,message:x})}
-  if(m==='GET'&&p==='/api/chat')return json(res,200,{ok:true,messages:db.chat.slice(-100)});
-  if(m==='GET'&&p==='/api/events')return json(res,200,{ok:true,events:(db.events||[]).slice(-50).reverse()});
-
-  if(m==='GET'&&p==='/api/rankings/global')return json(res,200,{ok:true,players:playerRanks()});
-  if(m==='GET'&&p==='/api/rankings/company')return json(res,200,{ok:true,companies:companyRanks()});
-  if(m==='GET'&&p==='/api/rankings/country'){const c=String(u.searchParams.get('country')||'');return json(res,200,{ok:true,players:playerRanks().filter(x=>!c||x.country===c)})}
-  if(m==='POST'&&p==='/api/wars'){const target=Number(b.targetPlayerId||0);const targetPlayer=db.players.find(x=>x.id===target);if(!targetPlayer||target===player.id)return json(res,400,{ok:false,error:'valid target player required'});const w={id:nextId('war'),attackerId:player.id,targetPlayerId:target,status:'pending',score:0,createdAt:now()};db.wars.push(w);save();addEvent('war',`${player.username} challenged ${targetPlayer.username}`,player.id);return json(res,201,{ok:true,war:w})}
-  if(m==='GET'&&p==='/api/wars')return json(res,200,{ok:true,wars:db.wars});
-  return json(res,404,{ok:false,error:'unknown endpoint',method:m,path:p});
-}
-ensureDb();
-http.createServer((req,res)=>route(req,res).catch(e=>json(res,500,{ok:false,error:String(e.message||e)}))).listen(PORT,HOST,()=>console.log(`Tycoon multiplayer server v0.3 listening on http://${HOST}:${PORT}`));
+function event(type,message,playerId=null){const db=getDb();db.events.push({id:nextId('event'),type,message,playerId,createdAt:now()});db.events=db.events.slice(-300);save()}
+function ensure(){const db=getDb();for(const k of Object.keys({players:1,companies:1,businesses:1,assets:1,contracts:1,contractBids:1,alliances:1,allianceMembers:1,wars:1,chat:1,sessions:1,miningSites:1,companyLocations:1,army:1,events:1,counters:1}))db[k]??=[];db.counters=db.counters||{};for(const k of ['player','company','business','asset','contract','bid','alliance','war','chat','site','event'])db.counters[k]??=1;if(!db.miningSites.length)SITES.forEach((s,i)=>db.miningSites.push({id:nextId('site'),name:s[0],resource:s[1],lat:s[2],lng:s[3],rate:s[4],ownerId:null}));for(const p of db.players){p.money??=100000;p.netWorth??=p.money;p.country??='IN';p.lastActive??=0;p.companyId??=null;p.allianceId??=null}save()}
+function playerRank(){return [...getDb().players].sort((a,b)=>(b.netWorth||0)-(a.netWorth||0)).map((p,i)=>({rank:i+1,...pub(p)}))}
+function companyRank(){return [...getDb().companies].sort((a,b)=>(b.value||0)-(a.value||0)).map((c,i)=>({rank:i+1,...c}))}
+function online(){const cut=now()-ONLINE_MS;return getDb().players.filter(p=>(p.lastActive||0)>=cut).map(p=>({id:p.id,username:p.username,country:p.country,netWorth:p.netWorth||0,companyId:p.companyId}))}
+function accrue(p){const db=getDb();let gain=0,t=now();for(const a of db.assets.filter(x=>x.ownerId===p.id)){const spec=ASSETS.find(s=>s.type===a.type);if(!spec)continue;const cycles=Math.floor((t-(a.lastAt||t))/CYCLE);if(cycles>0){const g=cycles*spec.income*(a.quantity||1);p.money+=g;p.netWorth+=g;a.lastAt=(a.lastAt||t)+cycles*CYCLE;gain+=g}}for(const s of db.miningSites.filter(x=>x.ownerId===p.id)){const cycles=Math.floor((t-(s.lastAt||t))/CYCLE);if(cycles>0){const g=cycles*s.rate;p.money+=g;p.netWorth+=g;s.lastAt=(s.lastAt||t)+cycles*CYCLE;gain+=g}}if(gain)save();return gain}
+function armyFor(p){const db=getDb();let a=db.army.find(x=>x.playerId===p.id);if(!a){a={playerId:p.id,ground:0,air:0,offensiveLevel:1,attackPoints:3,lastAttackRefresh:now()};db.army.push(a);save()}const refill=Math.floor((now()-a.lastAttackRefresh)/3600000);if(refill>0){a.attackPoints=Math.min(3,a.attackPoints+refill);a.lastAttackRefresh+=refill*3600000;save()}return a}
+function requireAuth(req,res,p){const open=['/api/rankings/global','/api/rankings/company','/api/rankings/country','/api/players/online','/api/events','/api/businesses/catalog','/api/assets/catalog','/api/world/sites','/api/world/companies'];if(p.startsWith('/api/')&&!me(req)&&!open.includes(p))return true;return false}
+async function route(req,res){const u=new URL(req.url,`http://${req.headers.host}`),p=u.pathname,m=req.method,b=await readBody(req),db=getDb();if(m==='OPTIONS')return json(res,200,{ok:true});
+ if(m==='GET'&&p==='/health')return json(res,200,{ok:true,service:'tycoon-private-server',version:'0.4.0',time:now(),online:online().length});
+ if(m==='POST'&&p==='/api/auth/register'){const email=cleanEmail(b.email),password=String(b.password||''),username=String(b.username||email.split('@')[0]).trim().slice(0,32),country=String(b.country||'IN').trim().slice(0,3).toUpperCase(),companyName=String(b.company_name||b.companyName||`${username} Industries`).trim().slice(0,64);if(!email||password.length<4)return json(res,400,{ok:false,error:'email and password (4+ chars) required'});if(db.players.some(x=>x.email===email))return json(res,409,{ok:false,error:'account exists'});if(db.players.some(x=>x.username.toLowerCase()===username.toLowerCase()))return json(res,409,{ok:false,error:'username already exists'});const id=nextId('player'),cId=nextId('company'),pl={id,email,username,country,companyId:cId,allianceId:null,money:100000,netWorth:100000,createdAt:now(),lastActive:now(),passwordHash:hash(password)},c={id:cId,ownerId:id,name:companyName,value:100000,cash:100000,level:1,createdAt:now()};db.players.push(pl);db.companies.push(c);armyFor(pl);const t=token();db.sessions.push({token:t,playerId:id,createdAt:now()});save();event('join',`${username} joined the empire`,id);return json(res,201,{ok:true,token:t,player:pub(pl),company:c})}
+ if(m==='POST'&&p==='/api/auth/login'){const email=cleanEmail(b.email),pl=db.players.find(x=>x.email===email);if(!pl||pl.passwordHash!==hash(b.password||''))return json(res,401,{ok:false,error:'invalid credentials'});pl.lastActive=now();const t=token();db.sessions.push({token:t,playerId:pl.id,createdAt:now()});save();return json(res,200,{ok:true,token:t,player:pub(pl),company:db.companies.find(c=>c.id===pl.companyId)||null})}
+ if(m==='POST'&&p==='/api/auth/logout'){const t=(req.headers.authorization||'').replace(/^Bearer\s+/i,'').trim();db.sessions=db.sessions.filter(s=>s.token!==t);save();return json(res,200,{ok:true})}
+ if(requireAuth(req,res,p))return json(res,401,{ok:false,error:'authentication required'});const player=me(req);if(player){player.lastActive=now();accrue(player)}
+ if(m==='GET'&&p==='/api/players/me')return json(res,200,{ok:true,player:pub(player),company:db.companies.find(c=>c.id===player.companyId)||null,alliance:db.alliances.find(a=>a.id===player.allianceId)||null});
+ if(m==='POST'&&p==='/api/heartbeat'){player.lastActive=now();save();return json(res,200,{ok:true,serverTime:now(),online:online().length})}
+ if(m==='GET'&&p==='/api/players/online')return json(res,200,{ok:true,count:online().length,players:online()});
+ if(m==='POST'&&p==='/api/players/me'){if(b.username!==undefined){const n=String(b.username).trim().slice(0,32);if(db.players.some(x=>x.id!==player.id&&x.username.toLowerCase()===n.toLowerCase()))return json(res,409,{ok:false,error:'username already exists'});player.username=n}if(b.country!==undefined)player.country=String(b.country).trim().slice(0,3).toUpperCase();save();return json(res,200,{ok:true,player:pub(player)})}
+ if(m==='GET'&&p.startsWith('/api/companies/')){const c=db.companies.find(x=>x.id===Number(p.split('/').pop()));return c?json(res,200,{ok:true,company:c}):json(res,404,{ok:false,error:'company not found'})}
+ if(m==='POST'&&/^\/api\/companies\/\d+\/upgrade$/.test(p)){const c=db.companies.find(x=>x.id===Number(p.split('/')[3]));if(!c||c.ownerId!==player.id)return json(res,403,{ok:false,error:'not owner'});const cost=c.level*25000;if(player.money<cost)return json(res,400,{ok:false,error:'insufficient funds'});player.money-=cost;c.level++;c.value+=cost*2;player.netWorth=Math.max(player.netWorth,c.value+player.money);save();return json(res,200,{ok:true,company:c,player:pub(player)})}
+ if(m==='GET'&&(p==='/api/businesses/catalog'||p==='/api/assets/catalog'))return json(res,200,{ok:true,businesses:BUSINESS,assets:ASSETS,transport:TRANSPORT,concessions:CONCESSIONS,subsidiaries:SUBS});
+ if(m==='GET'&&p==='/api/businesses')return json(res,200,{ok:true,businesses:db.assets.filter(x=>x.ownerId===player.id&&ASSETS.find(s=>s.type===x.type)?.category==='business')});
+ if(m==='GET'&&p==='/api/assets')return json(res,200,{ok:true,assets:db.assets.filter(x=>x.ownerId===player.id),concessions:db.assets.filter(x=>x.ownerId===player.id&&x.category==='concession'),subsidiaries:db.assets.filter(x=>x.ownerId===player.id&&x.category==='subsidiary')});
+ if(m==='POST'&&p==='/api/businesses/buy'){b.category='business'}
+ if(m==='POST'&&p==='/api/assets/buy'||m==='POST'&&p==='/api/businesses/buy'){
+   const type=String(b.type||'shop'),qty=Math.max(1,Math.min(10000,Number(b.quantity||1))),spec=ASSETS.find(x=>x.type===type&&x.category===b.category);
+   if(!spec)return json(res,400,{ok:false,error:'unknown asset type'});const cost=spec.price*qty;if(player.money<cost)return json(res,400,{ok:false,error:'insufficient funds'});
+   player.money-=cost;let a=db.assets.find(x=>x.ownerId===player.id&&x.type===type);if(!a){a={id:nextId('asset'),ownerId:player.id,category:spec.category,type:spec.type,name:spec.name,quantity:0,lastAt:now()};db.assets.push(a)}a.quantity+=qty;player.netWorth+=cost;save();event('asset',`${player.username} bought ${qty} ${spec.name}`,player.id);return json(res,201,{ok:true,asset:a,player:pub(player),cost})}
+ if(m==='POST'&&p==='/api/assets/collect'||m==='POST'&&p==='/api/businesses/collect'){const amount=accrue(player);return json(res,200,{ok:true,collected:amount,player:pub(player)})}
+ if(m==='POST'&&p==='/api/businesses/sell'){const a=db.assets.find(x=>x.id===Number(b.id)&&x.ownerId===player.id);if(!a)return json(res,404,{ok:false,error:'asset not found'});const q=Math.max(1,Math.min(a.quantity,Number(b.quantity||1))),spec=ASSETS.find(s=>s.type===a.type),refund=Math.floor(spec.price*.8*q);a.quantity-=q;player.money+=refund;player.netWorth=Math.max(0,player.netWorth-refund);if(a.quantity<=0)db.assets=db.assets.filter(x=>x!==a);save();return json(res,200,{ok:true,refund,player:pub(player)})}
+ if(m==='GET'&&p==='/api/world/sites')return json(res,200,{ok:true,sites:db.miningSites});
+ if(m==='GET'&&p==='/api/world/companies')return json(res,200,{ok:true,companies:db.companyLocations.map(x=>({...x,company:db.companies.find(c=>c.id===x.companyId),player:db.players.find(q=>q.id===x.playerId)?.username}))});
+ if(m==='POST'&&p==='/api/world/company-location'){const lat=Number(b.lat),lng=Number(b.lng);if(!Number.isFinite(lat)||!Number.isFinite(lng))return json(res,400,{ok:false,error:'valid coordinates required'});let x=db.companyLocations.find(q=>q.playerId===player.id);if(!x){x={id:nextId('site'),playerId:player.id,companyId:player.companyId,lat,lng};db.companyLocations.push(x)}else{x.lat=lat;x.lng=lng}save();return json(res,200,{ok:true,location:x})}
+ if(m==='POST'&&p==='/api/world/sites/claim'){const s=db.miningSites.find(x=>x.id===Number(b.siteId));if(!s)return json(res,404,{ok:false,error:'site not found'});if(s.ownerId&&s.ownerId!==player.id)return json(res,409,{ok:false,error:'site already owned'});const cost=50000;if(player.money<cost)return json(res,400,{ok:false,error:'claim cost is $50,000'});player.money-=cost;s.ownerId=player.id;s.lastAt=now();save();event('mine',`${player.username} claimed ${s.name}`,player.id);return json(res,200,{ok:true,site:s,player:pub(player)})}
+ if(m==='GET'&&p==='/api/army'){const a=armyFor(player);return json(res,200,{ok:true,army:{...a,groundAttack:a.ground*10+a.offensiveLevel*50,groundDefense:a.ground*8+a.offensiveLevel*40,airAttack:a.air*15}})}
+ if(m==='POST'&&p==='/api/army/upgrade'){const a=armyFor(player),cost=(a.ground+a.air+1)*10000;if(player.money<cost)return json(res,400,{ok:false,error:'insufficient funds'});player.money-=cost;if(b.type==='air')a.air+=1;else a.ground+=1;a.offensiveLevel+=1;player.netWorth=Math.max(player.netWorth,cost);save();return json(res,200,{ok:true,army:a,player:pub(player),cost})}
+ if(m==='POST'&&p==='/api/wars'){const target=Number(b.targetPlayerId),def=db.players.find(x=>x.id===target);if(!def||target===player.id)return json(res,400,{ok:false,error:'valid target player required'});const a=armyFor(player),d=armyFor(def);if(a.attackPoints<1)return json(res,400,{ok:false,error:'no attack points; one refreshes each hour'});a.attackPoints--;const ap=a.ground*10+a.air*15+a.offensiveLevel*50+Math.floor(Math.random()*30);const dp=d.ground*10+d.air*15+d.offensiveLevel*45+Math.floor(Math.random()*30);const win=ap>=dp;const w={id:nextId('war'),attackerId:player.id,targetPlayerId:target,status:'resolved',result:win?'WIN':'LOSS',attackerPower:ap,defenderPower:dp,createdAt:now()};if(win){a.offensiveLevel++;const damage=Math.min(def.money,Math.floor(def.money*.03));def.money-=damage;player.money+=damage;player.netWorth+=damage;w.loot=damage}db.wars.push(w);save();event('war',`${player.username} attacked ${def.username}: ${w.result}`,player.id);return json(res,200,{ok:true,war:w,army:a,player:pub(player),target:pub(def)})}
+ if(m==='GET'&&p==='/api/wars')return json(res,200,{ok:true,wars:db.wars.filter(w=>w.attackerId===player.id||w.targetPlayerId===player.id).slice(-100).reverse()});
+ if(m==='GET'&&p==='/api/contracts')return json(res,200,{ok:true,contracts:db.contracts});
+ if(m==='POST'&&p==='/api/contracts'){const c={id:nextId('contract'),ownerId:player.id,title:String(b.title||'Global Supply Contract'),reward:Number(b.reward||50000),quantity:Number(b.quantity||100),status:'open',winnerId:null,createdAt:now(),endsAt:now()+86400000};db.contracts.push(c);save();return json(res,201,{ok:true,contract:c})}
+ if(m==='POST'&&p==='/api/contracts/bid'){const c=db.contracts.find(x=>x.id===Number(b.contractId));if(!c)return json(res,404,{ok:false,error:'contract not found'});if(c.status!=='open')return json(res,409,{ok:false,error:'contract closed'});if(c.ownerId===player.id)return json(res,400,{ok:false,error:'cannot bid your own contract'});const amount=Math.max(1,Number(b.amount||c.reward));let bid=db.contractBids.find(x=>x.contractId===c.id&&x.playerId===player.id);if(!bid){bid={id:nextId('bid'),contractId:c.id,playerId:player.id,amount,createdAt:now()};db.contractBids.push(bid)}else bid.amount=amount;const bids=db.contractBids.filter(x=>x.contractId===c.id);if(bids.length>=2){const winner=bids.sort((x,y)=>x.amount-y.amount)[0];c.status='awarded';c.winnerId=winner.playerId;const wp=db.players.find(x=>x.id===winner.playerId);wp.money+=c.reward;wp.netWorth+=c.reward}save();return json(res,200,{ok:true,bid,contract:c})}
+ if(m==='GET'&&p==='/api/alliances')return json(res,200,{ok:true,alliances:db.alliances,members:db.allianceMembers});
+ if(m==='POST'&&p==='/api/alliances'){const name=String(b.name||'Alliance').trim().slice(0,64);if(db.alliances.some(a=>a.name.toLowerCase()===name.toLowerCase()))return json(res,409,{ok:false,error:'alliance name exists'});const a={id:nextId('alliance'),name,leaderId:player.id,createdAt:now()};db.alliances.push(a);db.allianceMembers.push({allianceId:a.id,playerId:player.id,role:'leader'});player.allianceId=a.id;save();return json(res,201,{ok:true,alliance:a})}
+ if(m==='POST'&&p==='/api/alliances/join'){const a=db.alliances.find(x=>x.id===Number(b.allianceId));if(!a)return json(res,404,{ok:false,error:'alliance not found'});if(!db.allianceMembers.some(x=>x.allianceId===a.id&&x.playerId===player.id))db.allianceMembers.push({allianceId:a.id,playerId:player.id,role:'member'});player.allianceId=a.id;save();return json(res,200,{ok:true,alliance:a})}
+ if(m==='GET'&&p==='/api/chat')return json(res,200,{ok:true,messages:db.chat.slice(-100)});
+ if(m==='POST'&&p==='/api/chat'){const text=String(b.text??'').trim().slice(0,500);if(!text)return json(res,400,{ok:false,error:'message required'});const x={id:nextId('chat'),playerId:player.id,username:player.username,text,createdAt:now()};db.chat.push(x);db.chat=db.chat.slice(-200);save();return json(res,201,{ok:true,message:x})}
+ if(m==='GET'&&p==='/api/events')return json(res,200,{ok:true,events:db.events.slice(-50).reverse()});
+ if(m==='GET'&&p==='/api/rankings/global')return json(res,200,{ok:true,players:playerRank()});
+ if(m==='GET'&&p==='/api/rankings/company')return json(res,200,{ok:true,companies:companyRank()});
+ if(m==='GET'&&p==='/api/rankings/country'){const c=String(u.searchParams.get('country')||'');return json(res,200,{ok:true,players:playerRank().filter(x=>!c||x.country===c)})}
+ return json(res,404,{ok:false,error:'unknown endpoint',method:m,path:p})}
+ensure();http.createServer((req,res)=>route(req,res).catch(e=>{console.error(e);json(res,500,{ok:false,error:String(e.message||e)})})).listen(PORT,HOST,()=>console.log(`Tycoon multiplayer server v0.4.0 listening on ${HOST}:${PORT}`));
