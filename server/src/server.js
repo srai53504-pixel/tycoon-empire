@@ -1,61 +1,1278 @@
-const http=require('http'),crypto=require('crypto');
-const PORT=process.env.PORT||10000;
-const db={players:[],assets:[],sites:[],contracts:[],bids:[],alliances:[],allianceMembers:[],wars:[],chat:[],events:[],loans:[],stocks:[],research:[],missions:[],projects:[],locations:[],sessions:{},next:1};
-const catalog=[
-['business','Pub',50000,350],['business','Coffee Shop',75000,550],['business','Restaurant',150000,1100],['business','Movie Theater',300000,2100],['business','Mall',1000000,7500],
-['transport','Taxi',20000,180],['transport','Bus',80000,600],['transport','Train',500000,4200],['transport','VIP Limousine',250000,1900],['transport','Passenger Plane',5000000,42000],['transport','Cargo Plane',7000000,55000],
-['concessions','Ground Transport',1000000,7000],['concessions','Commerce',2000000,14000],['concessions','Leisure',2500000,18000],['concessions','Air Lines',10000000,70000],['concessions','Sea Lines',12000000,85000],
-['properties','Office Tower',5000000,35000],['properties','Hotel',8000000,60000],['properties','Industrial Park',15000000,120000],
-['subsidiaries','Mining Company',20000000,150000],['subsidiaries','Traveling Company',12000000,90000],['subsidiaries','Soccer Team',18000000,110000],['subsidiaries','Brokerage Company',25000000,170000],['subsidiaries','Robotics Program',30000000,200000],
-['resources','Oil Reserve',4000000,28000],['resources','Gold Mine',6000000,42000],['resources','Gem Mine',9000000,65000],
-['research','Business AI',3000000,0],['research','Advanced Logistics',5000000,0],['research','Robotics',12000000,0],
-['production','Food Factory',5000000,38000],['production','Vehicle Factory',15000000,110000],['production','Electronics Factory',30000000,230000],
-['stocks','Blue Chip Portfolio',1000000,12000],['stocks','Tech Portfolio',3000000,38000],
-['investments','Startup Fund',5000000,50000],['investments','Football Investment',7000000,60000],
-['projects','Nuclear Plant',50000000,400000],['projects','Underground Hotel',35000000,260000]
+const http = require("http");
+const crypto = require("crypto");
+
+const PORT = process.env.PORT || 10000;
+
+const db = {
+    players: [],
+    assets: [],
+    contracts: [],
+    alliances: [],
+    wars: [],
+    chat: [],
+    loans: [],
+    missions: [],
+    sessions: {},
+    nextId: 1
+};
+
+/* =========================================================
+   CATALOG
+   ========================================================= */
+
+const catalog = [
+
+    // Businesses
+    {
+        category: "business",
+        type: "Pub",
+        price: 50000,
+        income: 350
+    },
+    {
+        category: "business",
+        type: "Coffee Shop",
+        price: 75000,
+        income: 550
+    },
+    {
+        category: "business",
+        type: "Restaurant",
+        price: 150000,
+        income: 1100
+    },
+    {
+        category: "business",
+        type: "Movie Theater",
+        price: 300000,
+        income: 2100
+    },
+    {
+        category: "business",
+        type: "Mall",
+        price: 1000000,
+        income: 7500
+    },
+
+    // Transportation
+    {
+        category: "transport",
+        type: "Taxi",
+        price: 20000,
+        income: 180
+    },
+    {
+        category: "transport",
+        type: "Bus",
+        price: 80000,
+        income: 600
+    },
+    {
+        category: "transport",
+        type: "Train",
+        price: 500000,
+        income: 4200
+    },
+    {
+        category: "transport",
+        type: "VIP Limousine",
+        price: 250000,
+        income: 1900
+    },
+    {
+        category: "transport",
+        type: "Passenger Plane",
+        price: 5000000,
+        income: 42000
+    },
+    {
+        category: "transport",
+        type: "Cargo Plane",
+        price: 7000000,
+        income: 55000
+    },
+
+    // Concessions
+    {
+        category: "concessions",
+        type: "Ground Transport",
+        price: 1000000,
+        income: 7000
+    },
+    {
+        category: "concessions",
+        type: "Commerce",
+        price: 2000000,
+        income: 14000
+    },
+    {
+        category: "concessions",
+        type: "Leisure",
+        price: 2500000,
+        income: 18000
+    },
+    {
+        category: "concessions",
+        type: "Air Lines",
+        price: 10000000,
+        income: 70000
+    },
+    {
+        category: "concessions",
+        type: "Sea Lines",
+        price: 12000000,
+        income: 85000
+    },
+
+    // Properties
+    {
+        category: "properties",
+        type: "Office Tower",
+        price: 5000000,
+        income: 35000
+    },
+    {
+        category: "properties",
+        type: "Hotel",
+        price: 8000000,
+        income: 60000
+    },
+    {
+        category: "properties",
+        type: "Industrial Park",
+        price: 15000000,
+        income: 120000
+    },
+
+    // Subsidiaries
+    {
+        category: "subsidiaries",
+        type: "Mining Company",
+        price: 20000000,
+        income: 150000
+    },
+    {
+        category: "subsidiaries",
+        type: "Traveling Company",
+        price: 12000000,
+        income: 90000
+    },
+    {
+        category: "subsidiaries",
+        type: "Soccer Team",
+        price: 18000000,
+        income: 110000
+    },
+    {
+        category: "subsidiaries",
+        type: "Brokerage Company",
+        price: 25000000,
+        income: 170000
+    },
+    {
+        category: "subsidiaries",
+        type: "Robotics Program",
+        price: 30000000,
+        income: 200000
+    },
+
+    // Resources
+    {
+        category: "resources",
+        type: "Oil Reserve",
+        price: 4000000,
+        income: 28000
+    },
+    {
+        category: "resources",
+        type: "Gold Mine",
+        price: 6000000,
+        income: 42000
+    },
+    {
+        category: "resources",
+        type: "Gem Mine",
+        price: 9000000,
+        income: 65000
+    },
+
+    // Research
+    {
+        category: "research",
+        type: "Business AI",
+        price: 3000000,
+        income: 0
+    },
+    {
+        category: "research",
+        type: "Advanced Logistics",
+        price: 5000000,
+        income: 0
+    },
+    {
+        category: "research",
+        type: "Robotics",
+        price: 12000000,
+        income: 0
+    },
+
+    // Production
+    {
+        category: "production",
+        type: "Food Factory",
+        price: 5000000,
+        income: 38000
+    },
+    {
+        category: "production",
+        type: "Vehicle Factory",
+        price: 15000000,
+        income: 110000
+    },
+    {
+        category: "production",
+        type: "Electronics Factory",
+        price: 30000000,
+        income: 230000
+    },
+
+    // Stocks
+    {
+        category: "stocks",
+        type: "Blue Chip Portfolio",
+        price: 1000000,
+        income: 12000
+    },
+    {
+        category: "stocks",
+        type: "Tech Portfolio",
+        price: 3000000,
+        income: 38000
+    },
+
+    // Investments
+    {
+        category: "investments",
+        type: "Startup Fund",
+        price: 5000000,
+        income: 50000
+    },
+    {
+        category: "investments",
+        type: "Football Investment",
+        price: 7000000,
+        income: 60000
+    },
+
+    // Projects
+    {
+        category: "projects",
+        type: "Nuclear Plant",
+        price: 50000000,
+        income: 400000
+    },
+    {
+        category: "projects",
+        type: "Underground Hotel",
+        price: 35000000,
+        income: 260000
+    }
 ];
-catalog.forEach((x,i)=>db.assets.push({id:i+1,category:x[0],type:x[1],price:x[2],income:x[3],description:'Purchase and operate '+x[1]}));
-[['Peru Copper','Peru','Copper',1200],['Brazil Iron','Brazil','Iron',1600],['Indonesia Nickel','Indonesia','Nickel',1100],['Australia Gold','Australia','Gold',700],['Canada Timber','Canada','Timber',900],['South Africa Platinum','South Africa','Platinum',500],['Chile Lithium','Chile','Lithium',1300],['India Bauxite','India','Bauxite',1000]].forEach((x,i)=>db.sites.push({id:i+1,name:x[0],country:x[1],resource:x[2],rate:x[3],ownerId:null}));
-for(let i=0;i<12;i++)db.contracts.push({id:i+1,name:['Natural Resources','Transportation','Real Estate','Manufacturing'][i%4]+' Contract #'+(i+1),country:['Indonesia','Mexico','India','Brazil'][i%4],quantity:1000+i*500,marketValue:500000+i*250000,status:'open'});
-function hash(s){return crypto.createHash('sha256').update(s).digest('hex')}
-function token(){return crypto.randomBytes(24).toString('hex')}
-function body(req){return new Promise((res,rej)=>{let s='';req.on('data',c=>s+=c);req.on('end',()=>{try{res(s?JSON.parse(s):{})}catch(e){res({})}})})}
-function send(res,code,obj){res.writeHead(code,{'Content-Type':'application/json','Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Content-Type, Authorization','Access-Control-Allow-Methods':'GET,POST,OPTIONS'});res.end(JSON.stringify(obj))}
-function auth(req){let h=req.headers.authorization||'',t=h.startsWith('Bearer ')?h.slice(7):'';return db.sessions[t]?db.players.find(p=>p.id===db.sessions[t]):null}
-function playerView(p){return {...p,companyWorth:p.cash+db.assets.filter(a=>a.ownerId===p.id).reduce((s,a)=>s+a.price*a.quantity,0)}}
-function requireP(req,res){let p=auth(req);if(!p){send(res,401,{error:'authentication required'});return null}return p}
-function route(req,res,method,path,b){if(method==='OPTIONS')return send(res,204,{});
-if(method==='GET'&&path==='/health')return send(res,200,{ok:true,version:'1.0.0',features:['assets','mining','map','army','wars','contracts','alliances','chat','stocks','research','loans','projects']});
-if(method==='POST'&&path==='/api/auth/register'){if(db.players.some(p=>p.email===b.email))return send(res,409,{error:'account exists'});let p={id:db.next++,email:b.email,password:hash(b.password||''),username:b.username||'player',companyName:b.companyName||'My Company',country:b.country||'IN',cash:100000,gold:100,level:1,offensiveLevel:1,defense:100};db.players.push(p);let t=token();db.sessions[t]=p.id;return send(res,200,{token:t,player:playerView(p)})}
-if(method==='POST'&&path==='/api/auth/login'){let p=db.players.find(x=>x.email===b.email&&x.password===hash(b.password||''));if(!p)return send(res,401,{error:'invalid credentials'});let t=token();db.sessions[t]=p.id;return send(res,200,{token:t,player:playerView(p)})}
-if(method==='POST'&&path==='/api/auth/logout'){let p=auth(req);for(const t of Object.keys(db.sessions))if(db.sessions[t]===p?.id)delete db.sessions[t];return send(res,200,{ok:true})}
-let p=requireP(req,res);if(!p)return;
-if(method==='GET'&&path==='/api/players/me')return send(res,200,{player:playerView(p)});
-if(method==='GET'&&path==='/api/players/online')return send(res,200,{players:db.players.map(playerView)});
-if(method==='GET'&&path.startsWith('/api/assets')){let q=new URL('http://x'+path).searchParams.get('category');let a=db.assets.filter(x=>!x.ownerId&&( !q||x.category===q)).map(x=>({...x}));let owned=db.assets.filter(x=>x.ownerId===p.id);return send(res,200,{assets:[...a,...owned.map(x=>({...x,owned:true}))]})}
-if(method==='POST'&&path==='/api/assets/buy'){let item=db.assets.find(x=>x.type===b.type&&!x.ownerId);let q=Math.max(1,Math.min(100000,Number(b.quantity)||1));if(!item)return send(res,404,{error:'asset not found'});let cost=item.price*q;if(p.cash<cost)return send(res,400,{error:'insufficient cash'});p.cash-=cost;let own=db.assets.find(x=>x.ownerId===p.id&&x.type===item.type);if(own)own.quantity+=q;else db.assets.push({...item,id:db.next++,ownerId:p.id,quantity:q});return send(res,200,{ok:true,cash:p.cash})}
-if(method==='POST'&&path==='/api/assets/collect'){let inc=db.assets.filter(x=>x.ownerId===p.id).reduce((s,x)=>s+x.income*x.quantity,0);p.cash+=inc;return send(res,200,{income:inc,cash:p.cash})}
-if(method==='GET'&&path==='/api/world/sites')return send(res,200,{sites:db.sites});
-if(method==='POST'&&path==='/api/world/sites/claim'){let s=db.sites.find(x=>x.id===Number(b.siteId));if(!s)return send(res,404,{error:'site not found'});if(s.ownerId&&s.ownerId!==p.id)return send(res,409,{error:'site owned'});if(p.cash<100000)return send(res,400,{error:'need $100,000 claim fee'});p.cash-=100000;s.ownerId=p.id;return send(res,200,{ok:true,site:s,cash:p.cash})}
-if(method==='GET'&&path==='/api/army'){return send(res,200,{army:{ground:p.ground||0,air:p.air||0,defense:p.defense||100,offensiveLevel:p.offensiveLevel||1}})}
-if(method==='POST'&&path==='/api/army/upgrade'){let q=Math.max(1,Math.min(100000,Number(b.quantity)||100)),cost=q*500;if(p.cash<cost)return send(res,400,{error:'insufficient cash'});p.cash-=cost;p.ground=(p.ground||0)+q;p.defense=(p.defense||100)+q;return send(res,200,{ok:true,army:{ground:p.ground,air:p.air||0,defense:p.defense,offensiveLevel:p.offensiveLevel||1},cash:p.cash})}
-if(method==='POST'&&path==='/api/wars'){let target=db.players.find(x=>x.id===Number(b.targetPlayerId));if(!target||target.id===p.id)return send(res,400,{error:'invalid target'});let atk=(p.offensiveLevel||1)*100+(p.ground||0)+(p.air||0),def=(target.defense||100)+(target.ground||0)+(target.air||0),win=atk>=def*(0.8+Math.random()*0.4);if(win){p.offensiveLevel=(p.offensiveLevel||1)+1;target.cash=Math.max(0,target.cash-Math.min(target.cash,Math.floor(target.cash*.03)));}let w={id:db.next++,attackerId:p.id,targetId:target.id,win,attackPower:atk,defensePower:def,createdAt:Date.now()};db.wars.push(w);return send(res,200,{result:{win,message:win?'Victory! Offensive level increased.':'Defeat. Rebuild your army.'},war:w,army:{offensiveLevel:p.offensiveLevel}})}
-if(method==='GET'&&path==='/api/contracts')return send(res,200,{contracts:db.contracts.filter(x=>x.status==='open')});
-if(method==='POST'&&path==='/api/contracts/bid'){let c=db.contracts.find(x=>x.id===Number(b.contractId)&&x.status==='open');if(!c)return send(res,404,{error:'contract unavailable'});let existing=db.bids.find(x=>x.contractId===c.id&&x.playerId===p.id);if(existing)return send(res,409,{error:'already bid'});if(p.cash<c.marketValue*.05)return send(res,400,{error:'5% bid deposit required'});p.cash-=c.marketValue*.05;db.bids.push({id:db.next++,contractId:c.id,playerId:p.id});if(db.bids.filter(x=>x.contractId===c.id).length>=2){let bids=db.bids.filter(x=>x.contractId===c.id),winner=bids[Math.floor(Math.random()*bids.length)];c.status='won';c.winnerId=winner.playerId;if(winner.playerId===p.id)p.cash+=c.marketValue}else{}return send(res,200,{ok:true,contract:c})}
-if(method==='GET'&&path==='/api/alliances')return send(res,200,{alliances:db.alliances});
-if(method==='POST'&&path==='/api/alliances'){let a={id:db.next++,name:b.name||'Alliance',ownerId:p.id,members:[p.id]};db.alliances.push(a);return send(res,200,{alliance:a})}
-if(method==='POST'&&path==='/api/alliances/join'){let a=db.alliances.find(x=>x.id===Number(b.allianceId));if(!a)return send(res,404,{error:'alliance not found'});if(!a.members.includes(p.id))a.members.push(p.id);return send(res,200,{alliance:a})}
-if(method==='GET'&&path==='/api/chat')return send(res,200,{messages:db.chat.slice(-100)});
-if(method==='POST'&&path==='/api/chat'){db.chat.push({id:db.next++,playerId:p.id,username:p.username,message:String(b.message||'').slice(0,500),at:Date.now()});return send(res,200,{ok:true})}
-if(method==='GET'&&path==='/api/rankings/global')return send(res,200,{rankings:db.players.map(playerView).sort((a,b)=>b.companyWorth-a.companyWorth)});
-if(method==='GET'&&path==='/api/world/companies')return send(res,200,{companies:db.players.map(x=>({id:x.id,username:x.username,companyName:x.companyName,country:x.country,lat:x.lat||20,lng:x.lng||78}))});
-if(method==='GET'&&path==='/api/world/company-location')return send(res,200,{location:{lat:p.lat||20,lng:p.lng||78}});
-if(method==='POST'&&path==='/api/world/company-location'){let lat=Number(b.lat),lng=Number(b.lng);if(!Number.isFinite(lat)||!Number.isFinite(lng)||lat<-90||lat>90||lng<-180||lng>180)return send(res,400,{error:'invalid coordinates'});p.lat=lat;p.lng=lng;return send(res,200,{ok:true,location:{lat,lng}})}
-if(method==='GET'&&path==='/api/missions')return send(res,200,{missions:[{id:1,name:'First Business',reward:25000,done:db.assets.some(a=>a.ownerId===p.id)},{id:2,name:'First Mining Site',reward:50000,done:db.sites.some(s=>s.ownerId===p.id)}]});
-if(method==='GET'&&path==='/api/loans')return send(res,200,{loans:db.loans.filter(x=>x.playerId===p.id)});
-if(method==='POST'&&path==='/api/loans'){let amount=Math.max(10000,Math.min(10000000,Number(b.amount)||10000));let due=amount*1.1;let l={id:db.next++,playerId:p.id,amount,due,createdAt:Date.now(),paid:false};db.loans.push(l);p.cash+=amount;return send(res,200,{loan:l,cash:p.cash})}
-if(method==='POST'&&path==='/api/loans/repay'){let l=db.loans.find(x=>x.id===Number(b.loanId)&&x.playerId===p.id&&!x.paid);if(!l)return send(res,404,{error:'loan not found'});if(p.cash<l.due)return send(res,400,{error:'insufficient cash'});p.cash-=l.due;l.paid=true;return send(res,200,{ok:true,cash:p.cash})}
-if(method==='GET'&&path==='/api/events')return send(res,200,{events:db.events.slice(-100)});
-return send(res,404,{error:'endpoint not found'})}
-const srv=http.createServer(async(req,res)=>{try{let b=await body(req);route(req,res,req.method,req.url.split('?')[0],b)}catch(e){send(res,500,{error:e.message})}});
-srv.listen(PORT,()=>console.log('Empire Manager server '+PORT));
+
+/* =========================================================
+   HELPERS
+   ========================================================= */
+
+function hash(value) {
+    return crypto
+        .createHash("sha256")
+        .update(String(value))
+        .digest("hex");
+}
+
+function createToken() {
+    return crypto.randomBytes(32).toString("hex");
+}
+
+function readBody(req) {
+
+    return new Promise(resolve => {
+
+        let data = "";
+
+        req.on("data", chunk => {
+            data += chunk;
+        });
+
+        req.on("end", () => {
+
+            if (!data) {
+                resolve({});
+                return;
+            }
+
+            try {
+                resolve(JSON.parse(data));
+            } catch {
+                resolve({});
+            }
+        });
+    });
+}
+
+function send(res, status, data) {
+
+    res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers":
+            "Content-Type, Authorization",
+        "Access-Control-Allow-Methods":
+            "GET,POST,OPTIONS"
+    });
+
+    res.end(JSON.stringify(data));
+}
+
+function authenticate(req) {
+
+    const header =
+        req.headers.authorization || "";
+
+    if (!header.startsWith("Bearer ")) {
+        return null;
+    }
+
+    const token =
+        header.substring(7);
+
+    const playerId =
+        db.sessions[token];
+
+    if (!playerId) {
+        return null;
+    }
+
+    return db.players.find(
+        player => player.id === playerId
+    ) || null;
+}
+
+function requirePlayer(req, res) {
+
+    const player = authenticate(req);
+
+    if (!player) {
+
+        send(res, 401, {
+            error: "authentication required"
+        });
+
+        return null;
+    }
+
+    return player;
+}
+
+function playerView(player) {
+
+    const ownedValue =
+        db.assets
+            .filter(asset =>
+                asset.ownerId === player.id
+            )
+            .reduce(
+                (total, asset) =>
+                    total +
+                    asset.price *
+                    asset.quantity,
+                0
+            );
+
+    return {
+        id: player.id,
+        username: player.username,
+        email: player.email,
+        companyName: player.companyName,
+        country: player.country,
+        cash: player.cash,
+        gold: player.gold,
+        level: player.level,
+        companyWorth:
+            player.cash + ownedValue,
+        offensiveLevel:
+            player.offensiveLevel,
+        defense:
+            player.defense
+    };
+}
+
+/* =========================================================
+   ROUTER
+   ========================================================= */
+
+async function route(req, res) {
+
+    const method = req.method;
+    const fullPath = req.url || "/";
+    const path = fullPath.split("?")[0];
+
+    if (method === "OPTIONS") {
+        return send(res, 204, {});
+    }
+
+    const body = await readBody(req);
+
+    /* =====================================================
+       HEALTH
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/health"
+    ) {
+
+        return send(res, 200, {
+            ok: true,
+            version: "0.5.0",
+            features: [
+                "auth",
+                "players",
+                "assets",
+                "businesses",
+                "transport",
+                "contracts",
+                "alliances",
+                "chat",
+                "army",
+                "wars",
+                "missions",
+                "loans",
+                "rankings"
+            ]
+        });
+    }
+
+    /* =====================================================
+       REGISTER
+       ===================================================== */
+
+    if (
+        method === "POST" &&
+        path === "/api/auth/register"
+    ) {
+
+        const email =
+            String(body.email || "")
+                .trim()
+                .toLowerCase();
+
+        const username =
+            String(body.username || "player")
+                .trim();
+
+        const password =
+            String(body.password || "");
+
+        if (!email || !password) {
+
+            return send(res, 400, {
+                error: "email and password required"
+            });
+        }
+
+        if (
+            db.players.some(
+                player =>
+                    player.email === email
+            )
+        ) {
+
+            return send(res, 409, {
+                error: "account exists"
+            });
+        }
+
+        const player = {
+
+            id: db.nextId++,
+
+            email,
+
+            password:
+                hash(password),
+
+            username,
+
+            companyName:
+                String(
+                    body.companyName ||
+                    "My Company"
+                ),
+
+            country:
+                String(
+                    body.country ||
+                    "IN"
+                ),
+
+            cash: 100000,
+
+            gold: 100,
+
+            level: 1,
+
+            offensiveLevel: 1,
+
+            defense: 100,
+
+            ground: 0,
+
+            air: 0
+        };
+
+        db.players.push(player);
+
+        const token =
+            createToken();
+
+        db.sessions[token] =
+            player.id;
+
+        return send(res, 200, {
+            token,
+            player: playerView(player)
+        });
+    }
+
+    /* =====================================================
+       LOGIN
+       ===================================================== */
+
+    if (
+        method === "POST" &&
+        path === "/api/auth/login"
+    ) {
+
+        const email =
+            String(body.email || "")
+                .trim()
+                .toLowerCase();
+
+        const password =
+            String(body.password || "");
+
+        const player =
+            db.players.find(
+                p =>
+                    p.email === email &&
+                    p.password === hash(password)
+            );
+
+        if (!player) {
+
+            return send(res, 401, {
+                error: "invalid credentials"
+            });
+        }
+
+        const token =
+            createToken();
+
+        db.sessions[token] =
+            player.id;
+
+        return send(res, 200, {
+            token,
+            player: playerView(player)
+        });
+    }
+
+    /* =====================================================
+       LOGOUT
+       ===================================================== */
+
+    if (
+        method === "POST" &&
+        path === "/api/auth/logout"
+    ) {
+
+        const player =
+            authenticate(req);
+
+        if (player) {
+
+            for (
+                const token of Object.keys(
+                    db.sessions
+                )
+            ) {
+
+                if (
+                    db.sessions[token] ===
+                    player.id
+                ) {
+
+                    delete db.sessions[token];
+                }
+            }
+        }
+
+        return send(res, 200, {
+            ok: true
+        });
+    }
+
+    /* =====================================================
+       AUTHENTICATED ROUTES
+       ===================================================== */
+
+    const player =
+        requirePlayer(req, res);
+
+    if (!player) {
+        return;
+    }
+
+    /* =====================================================
+       CURRENT PLAYER
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/players/me"
+    ) {
+
+        return send(res, 200, {
+            player:
+                playerView(player)
+        });
+    }
+
+    /* =====================================================
+       ASSET CATALOG
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/assets"
+    ) {
+
+        const url =
+            new URL(
+                "http://localhost" +
+                fullPath
+            );
+
+        const category =
+            url.searchParams.get(
+                "category"
+            );
+
+        const catalogItems =
+            db.assets
+                .filter(asset =>
+                    !asset.ownerId &&
+                    (
+                        !category ||
+                        asset.category ===
+                        category
+                    )
+                )
+                .map(asset => ({
+                    ...asset
+                }));
+
+        const owned =
+            db.assets
+                .filter(asset =>
+                    asset.ownerId ===
+                    player.id
+                )
+                .map(asset => ({
+                    ...asset,
+                    owned: true
+                }));
+
+        return send(res, 200, {
+            assets: [
+                ...catalogItems,
+                ...owned
+            ]
+        });
+    }
+
+    /* =====================================================
+       BUY ASSET
+       ===================================================== */
+
+    if (
+        method === "POST" &&
+        path === "/api/assets/buy"
+    ) {
+
+        const type =
+            String(body.type || "")
+                .trim();
+
+        const quantity =
+            Math.max(
+                1,
+                Math.min(
+                    100000,
+                    Number(body.quantity) || 1
+                )
+            );
+
+        if (!type) {
+
+            return send(res, 400, {
+                error:
+                    "asset type required"
+            });
+        }
+
+        const item =
+            db.assets.find(
+                asset =>
+                    asset.type === type &&
+                    !asset.ownerId
+            );
+
+        if (!item) {
+
+            return send(res, 404, {
+                error:
+                    "asset not found",
+                requestedType: type
+            });
+        }
+
+        const cost =
+            item.price *
+            quantity;
+
+        if (
+            player.cash <
+            cost
+        ) {
+
+            return send(res, 400, {
+                error:
+                    "insufficient cash",
+                price: item.price,
+                quantity,
+                cost,
+                cash: player.cash
+            });
+        }
+
+        player.cash -= cost;
+
+        let owned =
+            db.assets.find(
+                asset =>
+                    asset.ownerId ===
+                    player.id &&
+                    asset.type ===
+                    type
+            );
+
+        if (owned) {
+
+            owned.quantity +=
+                quantity;
+
+        } else {
+
+            owned = {
+                ...item,
+
+                id:
+                    db.nextId++,
+
+                ownerId:
+                    player.id,
+
+                quantity
+            };
+
+            db.assets.push(owned);
+        }
+
+        return send(res, 200, {
+            ok: true,
+
+            asset: {
+                id: owned.id,
+                type: owned.type,
+                category: owned.category,
+                quantity:
+                    owned.quantity,
+                price:
+                    owned.price,
+                income:
+                    owned.income
+            },
+
+            cash:
+                player.cash,
+
+            player:
+                playerView(player)
+        });
+    }
+
+    /* =====================================================
+       COLLECT INCOME
+       ===================================================== */
+
+    if (
+        method === "POST" &&
+        path === "/api/assets/collect"
+    ) {
+
+        const income =
+            db.assets
+                .filter(asset =>
+                    asset.ownerId ===
+                    player.id
+                )
+                .reduce(
+                    (total, asset) =>
+                        total +
+                        asset.income *
+                        asset.quantity,
+                    0
+                );
+
+        player.cash +=
+            income;
+
+        return send(res, 200, {
+
+            ok: true,
+
+            income,
+
+            cash:
+                player.cash,
+
+            player:
+                playerView(player)
+        });
+    }
+
+    /* =====================================================
+       CONTRACTS
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/contracts"
+    ) {
+
+        return send(res, 200, {
+            contracts: [
+                {
+                    id: 1,
+                    name:
+                        "Natural Resources Contract",
+                    country:
+                        "India",
+                    quantity:
+                        1000,
+                    marketValue:
+                        500000,
+                    status:
+                        "open"
+                },
+                {
+                    id: 2,
+                    name:
+                        "Transportation Contract",
+                    country:
+                        "Brazil",
+                    quantity:
+                        1500,
+                    marketValue:
+                        750000,
+                    status:
+                        "open"
+                }
+            ]
+        });
+    }
+
+    /* =====================================================
+       ALLIANCES
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/alliances"
+    ) {
+
+        return send(res, 200, {
+            alliances:
+                db.alliances
+        });
+    }
+
+    if (
+        method === "POST" &&
+        path === "/api/alliances"
+    ) {
+
+        const alliance = {
+
+            id:
+                db.nextId++,
+
+            name:
+                String(
+                    body.name ||
+                    "Alliance"
+                ),
+
+            ownerId:
+                player.id,
+
+            members: [
+                player.id
+            ]
+        };
+
+        db.alliances.push(
+            alliance
+        );
+
+        return send(res, 200, {
+            alliance
+        });
+    }
+
+    /* =====================================================
+       CHAT
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/chat"
+    ) {
+
+        return send(res, 200, {
+            messages:
+                db.chat.slice(-100)
+        });
+    }
+
+    if (
+        method === "POST" &&
+        path === "/api/chat"
+    ) {
+
+        const message = {
+
+            id:
+                db.nextId++,
+
+            playerId:
+                player.id,
+
+            username:
+                player.username,
+
+            message:
+                String(
+                    body.message || ""
+                ).slice(0, 500),
+
+            at:
+                Date.now()
+        };
+
+        db.chat.push(
+            message
+        );
+
+        return send(res, 200, {
+            ok: true,
+            message
+        });
+    }
+
+    /* =====================================================
+       RANKINGS
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/rankings/global"
+    ) {
+
+        const rankings =
+            db.players
+                .map(playerView)
+                .sort(
+                    (a, b) =>
+                        b.companyWorth -
+                        a.companyWorth
+                );
+
+        return send(res, 200, {
+            rankings
+        });
+    }
+
+    /* =====================================================
+       ARMY
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/army"
+    ) {
+
+        return send(res, 200, {
+
+            army: {
+
+                ground:
+                    player.ground || 0,
+
+                air:
+                    player.air || 0,
+
+                defense:
+                    player.defense || 100,
+
+                offensiveLevel:
+                    player.offensiveLevel || 1
+            }
+        });
+    }
+
+    if (
+        method === "POST" &&
+        path === "/api/army/upgrade"
+    ) {
+
+        const quantity =
+            Math.max(
+                1,
+                Number(body.quantity) || 1
+            );
+
+        const cost =
+            quantity * 500;
+
+        if (
+            player.cash <
+            cost
+        ) {
+
+            return send(res, 400, {
+                error:
+                    "insufficient cash"
+            });
+        }
+
+        player.cash -= cost;
+
+        player.ground =
+            (player.ground || 0) +
+            quantity;
+
+        player.defense =
+            (player.defense || 100) +
+            quantity;
+
+        return send(res, 200, {
+
+            ok: true,
+
+            cash:
+                player.cash,
+
+            army: {
+
+                ground:
+                    player.ground,
+
+                air:
+                    player.air || 0,
+
+                defense:
+                    player.defense,
+
+                offensiveLevel:
+                    player.offensiveLevel || 1
+            }
+        });
+    }
+
+    /* =====================================================
+       LOANS
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/loans"
+    ) {
+
+        return send(res, 200, {
+            loans:
+                db.loans.filter(
+                    loan =>
+                        loan.playerId ===
+                        player.id
+                )
+        });
+    }
+
+    if (
+        method === "POST" &&
+        path === "/api/loans"
+    ) {
+
+        const amount =
+            Math.max(
+                10000,
+                Math.min(
+                    10000000,
+                    Number(body.amount) ||
+                    10000
+                )
+            );
+
+        const loan = {
+
+            id:
+                db.nextId++,
+
+            playerId:
+                player.id,
+
+            amount,
+
+            due:
+                amount * 1.1,
+
+            paid:
+                false,
+
+            createdAt:
+                Date.now()
+        };
+
+        db.loans.push(
+            loan
+        );
+
+        player.cash +=
+            amount;
+
+        return send(res, 200, {
+            loan,
+            cash:
+                player.cash
+        });
+    }
+
+    /* =====================================================
+       MISSIONS
+       ===================================================== */
+
+    if (
+        method === "GET" &&
+        path === "/api/missions"
+    ) {
+
+        const hasBusiness =
+            db.assets.some(
+                asset =>
+                    asset.ownerId ===
+                    player.id &&
+                    asset.category ===
+                    "business"
+            );
+
+        return send(res, 200, {
+
+            missions: [
+
+                {
+                    id: 1,
+                    name:
+                        "First Business",
+                    reward:
+                        25000,
+                    done:
+                        hasBusiness
+                },
+
+                {
+                    id: 2,
+                    name:
+                        "Build Your Empire",
+                    reward:
+                        100000,
+                    done:
+                        db.assets.filter(
+                            asset =>
+                                asset.ownerId ===
+                                player.id
+                        ).length >= 5
+                }
+            ]
+        });
+    }
+
+    /* =====================================================
+       UNKNOWN ENDPOINT
+       ===================================================== */
+
+    return send(res, 404, {
+        error:
+            "endpoint not found"
+    });
+}
+
+/* =========================================================
+   CREATE SERVER
+   ========================================================= */
+
+const server =
+    http.createServer(
+        async (req, res) => {
+
+            try {
+
+                await route(
+                    req,
+                    res
+                );
+
+            } catch (error) {
+
+                console.error(error);
+
+                send(res, 500, {
+                    error:
+                        error.message ||
+                        "internal server error"
+                });
+            }
+        }
+    );
+
+server.listen(
+    PORT,
+    () => {
+        console.log(
+            "Entrepreneur Empire server running on port " +
+            PORT
+        );
+    }
+);
