@@ -2,455 +2,304 @@ const http = require("http");
 const crypto = require("crypto");
 
 const PORT = process.env.PORT || 10000;
+const VERSION = "0.5.1";
 
 const db = {
-    players: [],
-    assets: [],
-    contracts: [],
-    alliances: [],
-    wars: [],
-    chat: [],
-    loans: [],
-    missions: [],
-    sessions: {},
-    nextId: 1
+  players: [],
+  assets: [],
+  contracts: [],
+  alliances: [],
+  allianceMembers: [],
+  wars: [],
+  chat: [],
+  events: [],
+  loans: [],
+  sessions: {},
+  nextPlayerId: 1,
+  nextAssetId: 1,
+  nextContractId: 1,
+  nextAllianceId: 1,
+  nextWarId: 1,
+  nextMessageId: 1
 };
 
 /* =========================================================
-   CATALOG
+   ASSET CATALOG
    ========================================================= */
 
 const catalog = [
+  // Businesses
+  ["business", "Pub", 50000, 350],
+  ["business", "Dance Club", 100000, 750],
+  ["business", "Coffee Shop", 75000, 550],
+  ["business", "Restaurant", 150000, 1100],
+  ["business", "Movie Theater", 300000, 2100],
+  ["business", "Mall", 1000000, 7500],
 
-    // Businesses
-    {
-        category: "business",
-        type: "Pub",
-        price: 50000,
-        income: 350
-    },
-    {
-        category: "business",
-        type: "Coffee Shop",
-        price: 75000,
-        income: 550
-    },
-    {
-        category: "business",
-        type: "Restaurant",
-        price: 150000,
-        income: 1100
-    },
-    {
-        category: "business",
-        type: "Movie Theater",
-        price: 300000,
-        income: 2100
-    },
-    {
-        category: "business",
-        type: "Mall",
-        price: 1000000,
-        income: 7500
-    },
+  // Transportation
+  ["transportation", "Taxi", 25000, 200],
+  ["transportation", "Bus", 100000, 850],
+  ["transportation", "Train", 500000, 4500],
+  ["transportation", "VIP Limousine", 250000, 2200],
+  ["transportation", "Passenger Plane", 2500000, 22000],
+  ["transportation", "Cargo Plane", 3500000, 30000],
+  ["transportation", "Cargo Ship", 5000000, 42000],
+  ["transportation", "Passenger Ship", 7500000, 60000],
 
-    // Transportation
-    {
-        category: "transport",
-        type: "Taxi",
-        price: 20000,
-        income: 180
-    },
-    {
-        category: "transport",
-        type: "Bus",
-        price: 80000,
-        income: 600
-    },
-    {
-        category: "transport",
-        type: "Train",
-        price: 500000,
-        income: 4200
-    },
-    {
-        category: "transport",
-        type: "VIP Limousine",
-        price: 250000,
-        income: 1900
-    },
-    {
-        category: "transport",
-        type: "Passenger Plane",
-        price: 5000000,
-        income: 42000
-    },
-    {
-        category: "transport",
-        type: "Cargo Plane",
-        price: 7000000,
-        income: 55000
-    },
+  // Concessions
+  ["concession", "Ground Transport", 150000, 1200],
+  ["concession", "Commerce", 300000, 2500],
+  ["concession", "Leisure", 500000, 4000],
+  ["concession", "Airlines", 5000000, 40000],
+  ["concession", "Sea Lines", 7500000, 60000],
+  ["concession", "Real Estate", 10000000, 90000],
 
-    // Concessions
-    {
-        category: "concessions",
-        type: "Ground Transport",
-        price: 1000000,
-        income: 7000
-    },
-    {
-        category: "concessions",
-        type: "Commerce",
-        price: 2000000,
-        income: 14000
-    },
-    {
-        category: "concessions",
-        type: "Leisure",
-        price: 2500000,
-        income: 18000
-    },
-    {
-        category: "concessions",
-        type: "Air Lines",
-        price: 10000000,
-        income: 70000
-    },
-    {
-        category: "concessions",
-        type: "Sea Lines",
-        price: 12000000,
-        income: 85000
-    },
+  // Properties
+  ["property", "Small Office", 250000, 1500],
+  ["property", "Corporate Office", 750000, 5000],
+  ["property", "Headquarters", 2500000, 18000],
+  ["property", "Luxury Hotel", 5000000, 40000],
 
-    // Properties
-    {
-        category: "properties",
-        type: "Office Tower",
-        price: 5000000,
-        income: 35000
-    },
-    {
-        category: "properties",
-        type: "Hotel",
-        price: 8000000,
-        income: 60000
-    },
-    {
-        category: "properties",
-        type: "Industrial Park",
-        price: 15000000,
-        income: 120000
-    },
-
-    // Subsidiaries
-    {
-        category: "subsidiaries",
-        type: "Mining Company",
-        price: 20000000,
-        income: 150000
-    },
-    {
-        category: "subsidiaries",
-        type: "Traveling Company",
-        price: 12000000,
-        income: 90000
-    },
-    {
-        category: "subsidiaries",
-        type: "Soccer Team",
-        price: 18000000,
-        income: 110000
-    },
-    {
-        category: "subsidiaries",
-        type: "Brokerage Company",
-        price: 25000000,
-        income: 170000
-    },
-    {
-        category: "subsidiaries",
-        type: "Robotics Program",
-        price: 30000000,
-        income: 200000
-    },
-
-    // Resources
-    {
-        category: "resources",
-        type: "Oil Reserve",
-        price: 4000000,
-        income: 28000
-    },
-    {
-        category: "resources",
-        type: "Gold Mine",
-        price: 6000000,
-        income: 42000
-    },
-    {
-        category: "resources",
-        type: "Gem Mine",
-        price: 9000000,
-        income: 65000
-    },
-
-    // Research
-    {
-        category: "research",
-        type: "Business AI",
-        price: 3000000,
-        income: 0
-    },
-    {
-        category: "research",
-        type: "Advanced Logistics",
-        price: 5000000,
-        income: 0
-    },
-    {
-        category: "research",
-        type: "Robotics",
-        price: 12000000,
-        income: 0
-    },
-
-    // Production
-    {
-        category: "production",
-        type: "Food Factory",
-        price: 5000000,
-        income: 38000
-    },
-    {
-        category: "production",
-        type: "Vehicle Factory",
-        price: 15000000,
-        income: 110000
-    },
-    {
-        category: "production",
-        type: "Electronics Factory",
-        price: 30000000,
-        income: 230000
-    },
-
-    // Stocks
-    {
-        category: "stocks",
-        type: "Blue Chip Portfolio",
-        price: 1000000,
-        income: 12000
-    },
-    {
-        category: "stocks",
-        type: "Tech Portfolio",
-        price: 3000000,
-        income: 38000
-    },
-
-    // Investments
-    {
-        category: "investments",
-        type: "Startup Fund",
-        price: 5000000,
-        income: 50000
-    },
-    {
-        category: "investments",
-        type: "Football Investment",
-        price: 7000000,
-        income: 60000
-    },
-
-    // Projects
-    {
-        category: "projects",
-        type: "Nuclear Plant",
-        price: 50000000,
-        income: 400000
-    },
-    {
-        category: "projects",
-        type: "Underground Hotel",
-        price: 35000000,
-        income: 260000
-    }
+  // Resources
+  ["resource", "Oil", 1000000, 8000],
+  ["resource", "Gold", 1500000, 12000],
+  ["resource", "Gems", 2500000, 20000],
+  ["resource", "Minerals", 750000, 6000]
 ];
 
+for (const item of catalog) {
+  db.assets.push({
+    id: db.nextAssetId++,
+    category: item[0],
+    type: item[1],
+    price: item[2],
+    income: item[3],
+    description: "Purchase and operate " + item[1]
+  });
+}
+
 /* =========================================================
-   HELPERS
+   UTILITIES
    ========================================================= */
 
-function hash(value) {
-    return crypto
-        .createHash("sha256")
-        .update(String(value))
-        .digest("hex");
+function hashPassword(password) {
+  return crypto
+    .createHash("sha256")
+    .update(String(password))
+    .digest("hex");
 }
 
 function createToken() {
-    return crypto.randomBytes(32).toString("hex");
+  return crypto.randomBytes(32).toString("hex");
 }
 
-function readBody(req) {
+function parseBody(req) {
+  return new Promise((resolve) => {
+    let body = "";
 
-    return new Promise(resolve => {
+    req.on("data", chunk => {
+      body += chunk.toString();
 
-        let data = "";
-
-        req.on("data", chunk => {
-            data += chunk;
-        });
-
-        req.on("end", () => {
-
-            if (!data) {
-                resolve({});
-                return;
-            }
-
-            try {
-                resolve(JSON.parse(data));
-            } catch {
-                resolve({});
-            }
-        });
+      if (body.length > 1024 * 1024) {
+        req.destroy();
+      }
     });
+
+    req.on("end", () => {
+      if (!body) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        resolve({});
+      }
+    });
+  });
 }
 
 function send(res, status, data) {
+  const output = JSON.stringify(data);
 
-    res.writeHead(status, {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers":
-            "Content-Type, Authorization",
-        "Access-Control-Allow-Methods":
-            "GET,POST,OPTIONS"
-    });
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization",
+    "Access-Control-Allow-Methods":
+      "GET,POST,PUT,DELETE,OPTIONS"
+  });
 
-    res.end(JSON.stringify(data));
+  res.end(output);
 }
 
-function authenticate(req) {
+function getToken(req) {
+  const header = req.headers.authorization || "";
 
-    const header =
-        req.headers.authorization || "";
+  if (!header.startsWith("Bearer ")) {
+    return "";
+  }
 
-    if (!header.startsWith("Bearer ")) {
-        return null;
-    }
+  return header.substring(7).trim();
+}
 
-    const token =
-        header.substring(7);
+function getPlayer(req) {
+  const token = getToken(req);
 
-    const playerId =
-        db.sessions[token];
+  if (!token) {
+    return null;
+  }
 
-    if (!playerId) {
-        return null;
-    }
+  const playerId = db.sessions[token];
 
-    return db.players.find(
-        player => player.id === playerId
-    ) || null;
+  if (!playerId) {
+    return null;
+  }
+
+  return db.players.find(
+    p => p.id === playerId
+  ) || null;
 }
 
 function requirePlayer(req, res) {
+  const player = getPlayer(req);
 
-    const player = authenticate(req);
+  if (!player) {
+    send(res, 401, {
+      error: "unauthorized"
+    });
 
-    if (!player) {
+    return null;
+  }
 
-        send(res, 401, {
-            error: "authentication required"
-        });
-
-        return null;
-    }
-
-    return player;
+  return player;
 }
 
 function playerView(player) {
+  if (!player) {
+    return null;
+  }
 
-    const ownedValue =
-        db.assets
-            .filter(asset =>
-                asset.ownerId === player.id
-            )
-            .reduce(
-                (total, asset) =>
-                    total +
-                    asset.price *
-                    asset.quantity,
-                0
-            );
+  const assets = player.assets || [];
 
-    return {
-        id: player.id,
-        username: player.username,
-        email: player.email,
-        companyName: player.companyName,
-        country: player.country,
-        cash: player.cash,
-        gold: player.gold,
-        level: player.level,
-        companyWorth:
-            player.cash + ownedValue,
-        offensiveLevel:
-            player.offensiveLevel,
-        defense:
-            player.defense
-    };
+  let netWorth = player.cash;
+
+  for (const owned of assets) {
+    const asset = db.assets.find(
+      a =>
+        a.type.toLowerCase() ===
+        String(owned.type).toLowerCase()
+    );
+
+    if (asset) {
+      netWorth += asset.price * owned.quantity;
+    }
+  }
+
+  return {
+    id: player.id,
+    playerId: player.id,
+    username: player.username,
+    email: player.email,
+    companyName: player.companyName,
+    country: player.country,
+    level: player.level,
+    xp: player.xp,
+    cash: player.cash,
+    gold: player.gold,
+    netWorth,
+    offensiveLevel: player.offensiveLevel,
+    defense: player.defense,
+    online: true,
+    assets: assets
+  };
+}
+
+function normalizeType(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function findAsset(type) {
+  const requested = normalizeType(type);
+
+  if (!requested) {
+    return null;
+  }
+
+  return db.assets.find(asset => {
+    const actual = normalizeType(asset.type);
+
+    return (
+      actual === requested ||
+      actual.replace(/\s/g, "") ===
+        requested.replace(/\s/g, "")
+    );
+  }) || null;
 }
 
 /* =========================================================
-   ROUTER
+   SERVER
    ========================================================= */
 
-async function route(req, res) {
+const server = http.createServer(
+  async (req, res) => {
 
-    const method = req.method;
-    const fullPath = req.url || "/";
-    const path = fullPath.split("?")[0];
-
-    if (method === "OPTIONS") {
-        return send(res, 204, {});
+    if (req.method === "OPTIONS") {
+      return send(res, 204, {});
     }
 
-    const body = await readBody(req);
+    const url = new URL(
+      req.url,
+      `http://${req.headers.host || "localhost"}`
+    );
+
+    const path = url.pathname;
+
+    const body =
+      req.method === "POST" ||
+      req.method === "PUT" ||
+      req.method === "PATCH"
+        ? await parseBody(req)
+        : {};
 
     /* =====================================================
        HEALTH
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/health"
+      req.method === "GET" &&
+      path === "/health"
     ) {
-
-        return send(res, 200, {
-            ok: true,
-            version: "0.5.0",
-            features: [
-                "auth",
-                "players",
-                "assets",
-                "businesses",
-                "transport",
-                "contracts",
-                "alliances",
-                "chat",
-                "army",
-                "wars",
-                "missions",
-                "loans",
-                "rankings"
-            ]
-        });
+      return send(res, 200, {
+        ok: true,
+        version: VERSION,
+        service: "tycoon-empire",
+        players: db.players.length,
+        assets: db.assets.length,
+        features: [
+          "authentication",
+          "players",
+          "businesses",
+          "transportation",
+          "concessions",
+          "properties",
+          "resources",
+          "contracts",
+          "alliances",
+          "chat",
+          "rankings",
+          "army",
+          "wars",
+          "loans",
+          "missions"
+        ]
+      });
     }
 
     /* =====================================================
@@ -458,91 +307,88 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "POST" &&
-        path === "/api/auth/register"
+      req.method === "POST" &&
+      path === "/api/auth/register"
     ) {
 
-        const email =
-            String(body.email || "")
-                .trim()
-                .toLowerCase();
+      const username =
+        String(body.username || "").trim();
 
-        const username =
-            String(body.username || "player")
-                .trim();
+      const email =
+        String(body.email || "")
+          .trim()
+          .toLowerCase();
 
-        const password =
-            String(body.password || "");
+      const password =
+        String(body.password || "");
 
-        if (!email || !password) {
-
-            return send(res, 400, {
-                error: "email and password required"
-            });
-        }
-
-        if (
-            db.players.some(
-                player =>
-                    player.email === email
-            )
-        ) {
-
-            return send(res, 409, {
-                error: "account exists"
-            });
-        }
-
-        const player = {
-
-            id: db.nextId++,
-
-            email,
-
-            password:
-                hash(password),
-
-            username,
-
-            companyName:
-                String(
-                    body.companyName ||
-                    "My Company"
-                ),
-
-            country:
-                String(
-                    body.country ||
-                    "IN"
-                ),
-
-            cash: 100000,
-
-            gold: 100,
-
-            level: 1,
-
-            offensiveLevel: 1,
-
-            defense: 100,
-
-            ground: 0,
-
-            air: 0
-        };
-
-        db.players.push(player);
-
-        const token =
-            createToken();
-
-        db.sessions[token] =
-            player.id;
-
-        return send(res, 200, {
-            token,
-            player: playerView(player)
+      if (!username || !email || !password) {
+        return send(res, 400, {
+          error: "username, email and password are required"
         });
+      }
+
+      if (password.length < 4) {
+        return send(res, 400, {
+          error: "password must contain at least 4 characters"
+        });
+      }
+
+      const emailExists = db.players.some(
+        p => p.email === email
+      );
+
+      if (emailExists) {
+        return send(res, 409, {
+          error: "email already registered"
+        });
+      }
+
+      const usernameExists = db.players.some(
+        p =>
+          p.username.toLowerCase() ===
+          username.toLowerCase()
+      );
+
+      if (usernameExists) {
+        return send(res, 409, {
+          error: "username already exists"
+        });
+      }
+
+      const player = {
+        id: db.nextPlayerId++,
+        username,
+        email,
+        password: hashPassword(password),
+
+        companyName:
+          username + " Corporation",
+
+        country: "India",
+
+        level: 1,
+        xp: 0,
+
+        cash: 100000,
+        gold: 100,
+
+        offensiveLevel: 1,
+        defense: 100,
+
+        assets: [],
+
+        createdAt:
+          new Date().toISOString()
+      };
+
+      db.players.push(player);
+
+      return send(res, 201, {
+        ok: true,
+        message: "account created",
+        player: playerView(player)
+      });
     }
 
     /* =====================================================
@@ -550,42 +396,40 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "POST" &&
-        path === "/api/auth/login"
+      req.method === "POST" &&
+      path === "/api/auth/login"
     ) {
 
-        const email =
-            String(body.email || "")
-                .trim()
-                .toLowerCase();
+      const email =
+        String(body.email || "")
+          .trim()
+          .toLowerCase();
 
-        const password =
-            String(body.password || "");
+      const password =
+        String(body.password || "");
 
-        const player =
-            db.players.find(
-                p =>
-                    p.email === email &&
-                    p.password === hash(password)
-            );
+      const player = db.players.find(
+        p =>
+          p.email === email &&
+          p.password === hashPassword(password)
+      );
 
-        if (!player) {
-
-            return send(res, 401, {
-                error: "invalid credentials"
-            });
-        }
-
-        const token =
-            createToken();
-
-        db.sessions[token] =
-            player.id;
-
-        return send(res, 200, {
-            token,
-            player: playerView(player)
+      if (!player) {
+        return send(res, 401, {
+          error: "invalid email or password"
         });
+      }
+
+      const token = createToken();
+
+      db.sessions[token] = player.id;
+
+      return send(res, 200, {
+        ok: true,
+        token,
+        accessToken: token,
+        player: playerView(player)
+      });
     }
 
     /* =====================================================
@@ -593,45 +437,19 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "POST" &&
-        path === "/api/auth/logout"
+      req.method === "POST" &&
+      path === "/api/auth/logout"
     ) {
 
-        const player =
-            authenticate(req);
+      const token = getToken(req);
 
-        if (player) {
+      if (token) {
+        delete db.sessions[token];
+      }
 
-            for (
-                const token of Object.keys(
-                    db.sessions
-                )
-            ) {
-
-                if (
-                    db.sessions[token] ===
-                    player.id
-                ) {
-
-                    delete db.sessions[token];
-                }
-            }
-        }
-
-        return send(res, 200, {
-            ok: true
-        });
-    }
-
-    /* =====================================================
-       AUTHENTICATED ROUTES
-       ===================================================== */
-
-    const player =
-        requirePlayer(req, res);
-
-    if (!player) {
-        return;
+      return send(res, 200, {
+        ok: true
+      });
     }
 
     /* =====================================================
@@ -639,14 +457,32 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/players/me"
+      req.method === "GET" &&
+      path === "/api/players/me"
     ) {
 
-        return send(res, 200, {
-            player:
-                playerView(player)
-        });
+      const player =
+        requirePlayer(req, res);
+
+      if (!player) return;
+
+      return send(res, 200, {
+        player: playerView(player)
+      });
+    }
+
+    /* =====================================================
+       ONLINE PLAYERS
+       ===================================================== */
+
+    if (
+      req.method === "GET" &&
+      path === "/api/players/online"
+    ) {
+
+      return send(res, 200, {
+        players: db.players.map(playerView)
+      });
     }
 
     /* =====================================================
@@ -654,52 +490,33 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/assets"
+      req.method === "GET" &&
+      path === "/api/assets"
     ) {
 
-        const url =
-            new URL(
-                "http://localhost" +
-                fullPath
-            );
+      const player =
+        requirePlayer(req, res);
 
-        const category =
-            url.searchParams.get(
-                "category"
-            );
+      if (!player) return;
 
-        const catalogItems =
-            db.assets
-                .filter(asset =>
-                    !asset.ownerId &&
-                    (
-                        !category ||
-                        asset.category ===
-                        category
-                    )
-                )
-                .map(asset => ({
-                    ...asset
-                }));
+      const category =
+        String(
+          url.searchParams.get("category") || ""
+        ).trim();
 
-        const owned =
-            db.assets
-                .filter(asset =>
-                    asset.ownerId ===
-                    player.id
-                )
-                .map(asset => ({
-                    ...asset,
-                    owned: true
-                }));
+      const assets =
+        category
+          ? db.assets.filter(
+              a =>
+                a.category.toLowerCase() ===
+                category.toLowerCase()
+            )
+          : db.assets;
 
-        return send(res, 200, {
-            assets: [
-                ...catalogItems,
-                ...owned
-            ]
-        });
+      return send(res, 200, {
+        assets,
+        owned: player.assets || []
+      });
     }
 
     /* =====================================================
@@ -707,120 +524,135 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "POST" &&
-        path === "/api/assets/buy"
+      req.method === "POST" &&
+      path === "/api/assets/buy"
     ) {
 
-        const type =
-            String(body.type || "")
-                .trim();
+      const player =
+        requirePlayer(req, res);
 
-        const quantity =
-            Math.max(
-                1,
-                Math.min(
-                    100000,
-                    Number(body.quantity) || 1
-                )
-            );
+      if (!player) return;
 
-        if (!type) {
+      const requestedType =
+        String(
+          body.type ||
+          body.assetType ||
+          body.name ||
+          ""
+        ).trim();
 
-            return send(res, 400, {
-                error:
-                    "asset type required"
-            });
-        }
-
-        const item =
-            db.assets.find(
-                asset =>
-                    asset.type === type &&
-                    !asset.ownerId
-            );
-
-        if (!item) {
-
-            return send(res, 404, {
-                error:
-                    "asset not found",
-                requestedType: type
-            });
-        }
-
-        const cost =
-            item.price *
-            quantity;
-
-        if (
-            player.cash <
-            cost
-        ) {
-
-            return send(res, 400, {
-                error:
-                    "insufficient cash",
-                price: item.price,
-                quantity,
-                cost,
-                cash: player.cash
-            });
-        }
-
-        player.cash -= cost;
-
-        let owned =
-            db.assets.find(
-                asset =>
-                    asset.ownerId ===
-                    player.id &&
-                    asset.type ===
-                    type
-            );
-
-        if (owned) {
-
-            owned.quantity +=
-                quantity;
-
-        } else {
-
-            owned = {
-                ...item,
-
-                id:
-                    db.nextId++,
-
-                ownerId:
-                    player.id,
-
-                quantity
-            };
-
-            db.assets.push(owned);
-        }
-
-        return send(res, 200, {
-            ok: true,
-
-            asset: {
-                id: owned.id,
-                type: owned.type,
-                category: owned.category,
-                quantity:
-                    owned.quantity,
-                price:
-                    owned.price,
-                income:
-                    owned.income
-            },
-
-            cash:
-                player.cash,
-
-            player:
-                playerView(player)
+      if (!requestedType) {
+        return send(res, 400, {
+          error: "asset type required"
         });
+      }
+
+      const asset =
+        findAsset(requestedType);
+
+      if (!asset) {
+        return send(res, 404, {
+          error: "asset not found",
+          requestedType,
+          availableAssets:
+            db.assets.map(a => ({
+              id: a.id,
+              category: a.category,
+              type: a.type,
+              price: a.price
+            }))
+        });
+      }
+
+      let quantity =
+        Number(
+          body.quantity ||
+          body.amount ||
+          1
+        );
+
+      if (!Number.isFinite(quantity)) {
+        quantity = 1;
+      }
+
+      quantity =
+        Math.floor(quantity);
+
+      if (quantity < 1) {
+        quantity = 1;
+      }
+
+      if (quantity > 100000) {
+        return send(res, 400, {
+          error: "quantity too large"
+        });
+      }
+
+      const cost =
+        asset.price * quantity;
+
+      if (player.cash < cost) {
+        return send(res, 400, {
+          error: "insufficient cash",
+          cash: player.cash,
+          price: asset.price,
+          quantity,
+          cost
+        });
+      }
+
+      player.cash -= cost;
+
+      if (!player.assets) {
+        player.assets = [];
+      }
+
+      const existing =
+        player.assets.find(
+          owned =>
+            normalizeType(owned.type) ===
+            normalizeType(asset.type)
+        );
+
+      if (existing) {
+        existing.quantity += quantity;
+      } else {
+        player.assets.push({
+          type: asset.type,
+          quantity
+        });
+      }
+
+      player.xp +=
+        Math.max(1, Math.floor(cost / 10000));
+
+      while (
+        player.xp >= player.level * 100
+      ) {
+        player.xp -=
+          player.level * 100;
+
+        player.level++;
+      }
+
+      return send(res, 200, {
+        ok: true,
+        message: "purchase successful",
+
+        asset: {
+          id: asset.id,
+          category: asset.category,
+          type: asset.type,
+          price: asset.price,
+          income: asset.income
+        },
+
+        quantity,
+        cost,
+        cash: player.cash,
+
+        player: playerView(player)
+      });
     }
 
     /* =====================================================
@@ -828,39 +660,125 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "POST" &&
-        path === "/api/assets/collect"
+      req.method === "POST" &&
+      path === "/api/assets/collect"
     ) {
 
-        const income =
-            db.assets
-                .filter(asset =>
-                    asset.ownerId ===
-                    player.id
-                )
-                .reduce(
-                    (total, asset) =>
-                        total +
-                        asset.income *
-                        asset.quantity,
-                    0
-                );
+      const player =
+        requirePlayer(req, res);
 
-        player.cash +=
-            income;
+      if (!player) return;
 
-        return send(res, 200, {
+      let income = 0;
 
-            ok: true,
+      for (const owned of player.assets || []) {
 
-            income,
+        const asset =
+          findAsset(owned.type);
 
-            cash:
-                player.cash,
+        if (!asset) continue;
 
-            player:
-                playerView(player)
+        income +=
+          asset.income *
+          owned.quantity;
+      }
+
+      player.cash += income;
+
+      return send(res, 200, {
+        ok: true,
+        income,
+        cash: player.cash,
+        player: playerView(player)
+      });
+    }
+
+    /* =====================================================
+       SELL ASSET
+       ===================================================== */
+
+    if (
+      req.method === "POST" &&
+      path === "/api/assets/sell"
+    ) {
+
+      const player =
+        requirePlayer(req, res);
+
+      if (!player) return;
+
+      const requestedType =
+        String(
+          body.type ||
+          body.assetType ||
+          ""
+        ).trim();
+
+      const asset =
+        findAsset(requestedType);
+
+      if (!asset) {
+        return send(res, 404, {
+          error: "asset not found"
         });
+      }
+
+      let quantity =
+        Math.floor(
+          Number(body.quantity || 1)
+        );
+
+      if (quantity < 1) {
+        quantity = 1;
+      }
+
+      const owned =
+        (player.assets || []).find(
+          x =>
+            normalizeType(x.type) ===
+            normalizeType(asset.type)
+        );
+
+      if (
+        !owned ||
+        owned.quantity < quantity
+      ) {
+        return send(res, 400, {
+          error: "asset not owned",
+          owned: owned
+            ? owned.quantity
+            : 0
+        });
+      }
+
+      const value =
+        Math.floor(
+          asset.price *
+          quantity *
+          0.8
+        );
+
+      owned.quantity -= quantity;
+
+      if (owned.quantity <= 0) {
+        player.assets =
+          player.assets.filter(
+            x =>
+              normalizeType(x.type) !==
+              normalizeType(asset.type)
+          );
+      }
+
+      player.cash += value;
+
+      return send(res, 200, {
+        ok: true,
+        type: asset.type,
+        quantity,
+        value,
+        cash: player.cash,
+        player: playerView(player)
+      });
     }
 
     /* =====================================================
@@ -868,40 +786,82 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/contracts"
+      req.method === "GET" &&
+      path === "/api/contracts"
     ) {
 
-        return send(res, 200, {
-            contracts: [
-                {
-                    id: 1,
-                    name:
-                        "Natural Resources Contract",
-                    country:
-                        "India",
-                    quantity:
-                        1000,
-                    marketValue:
-                        500000,
-                    status:
-                        "open"
-                },
-                {
-                    id: 2,
-                    name:
-                        "Transportation Contract",
-                    country:
-                        "Brazil",
-                    quantity:
-                        1500,
-                    marketValue:
-                        750000,
-                    status:
-                        "open"
-                }
-            ]
+      return send(res, 200, {
+        contracts: db.contracts
+      });
+    }
+
+    if (
+      req.method === "POST" &&
+      path === "/api/contracts"
+    ) {
+
+      const player =
+        requirePlayer(req, res);
+
+      if (!player) return;
+
+      const contract = {
+        id: db.nextContractId++,
+        creatorId: player.id,
+        title:
+          String(body.title || "Business Contract"),
+        quantity:
+          Number(body.quantity || 1),
+        value:
+          Number(body.value || 0),
+        status: "open",
+        createdAt:
+          new Date().toISOString()
+      };
+
+      db.contracts.push(contract);
+
+      return send(res, 201, {
+        ok: true,
+        contract
+      });
+    }
+
+    /* =====================================================
+       CONTRACT BIDS
+       ===================================================== */
+
+    if (
+      req.method === "POST" &&
+      path === "/api/contracts/bid"
+    ) {
+
+      const player =
+        requirePlayer(req, res);
+
+      if (!player) return;
+
+      const contract =
+        db.contracts.find(
+          c =>
+            c.id ===
+            Number(body.contractId)
+        );
+
+      if (!contract) {
+        return send(res, 404, {
+          error: "contract not found"
         });
+      }
+
+      return send(res, 200, {
+        ok: true,
+        message: "bid submitted",
+        contractId: contract.id,
+        playerId: player.id,
+        amount:
+          Number(body.amount || 0)
+      });
     }
 
     /* =====================================================
@@ -909,47 +869,80 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/alliances"
+      req.method === "GET" &&
+      path === "/api/alliances"
     ) {
 
-        return send(res, 200, {
-            alliances:
-                db.alliances
-        });
+      return send(res, 200, {
+        alliances: db.alliances
+      });
     }
 
     if (
-        method === "POST" &&
-        path === "/api/alliances"
+      req.method === "POST" &&
+      path === "/api/alliances/create"
     ) {
 
-        const alliance = {
+      const player =
+        requirePlayer(req, res);
 
-            id:
-                db.nextId++,
+      if (!player) return;
 
-            name:
-                String(
-                    body.name ||
-                    "Alliance"
-                ),
+      const alliance = {
+        id: db.nextAllianceId++,
+        name:
+          String(body.name || "New Alliance"),
+        ownerId: player.id,
+        members: [player.id],
+        createdAt:
+          new Date().toISOString()
+      };
 
-            ownerId:
-                player.id,
+      db.alliances.push(alliance);
 
-            members: [
-                player.id
-            ]
-        };
+      return send(res, 201, {
+        ok: true,
+        alliance
+      });
+    }
 
-        db.alliances.push(
-            alliance
+    if (
+      req.method === "POST" &&
+      path === "/api/alliances/join"
+    ) {
+
+      const player =
+        requirePlayer(req, res);
+
+      if (!player) return;
+
+      const alliance =
+        db.alliances.find(
+          a =>
+            a.id ===
+            Number(body.allianceId)
         );
 
-        return send(res, 200, {
-            alliance
+      if (!alliance) {
+        return send(res, 404, {
+          error: "alliance not found"
         });
+      }
+
+      if (
+        !alliance.members.includes(
+          player.id
+        )
+      ) {
+        alliance.members.push(
+          player.id
+        );
+      }
+
+      return send(res, 200, {
+        ok: true,
+        alliance
+      });
     }
 
     /* =====================================================
@@ -957,49 +950,41 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/chat"
+      req.method === "GET" &&
+      path === "/api/chat"
     ) {
 
-        return send(res, 200, {
-            messages:
-                db.chat.slice(-100)
-        });
+      return send(res, 200, {
+        messages: db.chat.slice(-100)
+      });
     }
 
     if (
-        method === "POST" &&
-        path === "/api/chat"
+      req.method === "POST" &&
+      path === "/api/chat"
     ) {
 
-        const message = {
+      const player =
+        requirePlayer(req, res);
 
-            id:
-                db.nextId++,
+      if (!player) return;
 
-            playerId:
-                player.id,
+      const message = {
+        id: db.nextMessageId++,
+        playerId: player.id,
+        username: player.username,
+        message:
+          String(body.message || "").slice(0, 1000),
+        createdAt:
+          new Date().toISOString()
+      };
 
-            username:
-                player.username,
+      db.chat.push(message);
 
-            message:
-                String(
-                    body.message || ""
-                ).slice(0, 500),
-
-            at:
-                Date.now()
-        };
-
-        db.chat.push(
-            message
-        );
-
-        return send(res, 200, {
-            ok: true,
-            message
-        });
+      return send(res, 201, {
+        ok: true,
+        message
+      });
     }
 
     /* =====================================================
@@ -1007,22 +992,25 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/rankings/global"
+      req.method === "GET" &&
+      path === "/api/rankings"
     ) {
 
-        const rankings =
-            db.players
-                .map(playerView)
-                .sort(
-                    (a, b) =>
-                        b.companyWorth -
-                        a.companyWorth
-                );
+      const rankings =
+        db.players
+          .map(playerView)
+          .sort(
+            (a, b) =>
+              b.netWorth - a.netWorth
+          )
+          .map((player, index) => ({
+            rank: index + 1,
+            ...player
+          }));
 
-        return send(res, 200, {
-            rankings
-        });
+      return send(res, 200, {
+        rankings
+      });
     }
 
     /* =====================================================
@@ -1030,86 +1018,127 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/army"
+      req.method === "GET" &&
+      path === "/api/army"
     ) {
 
-        return send(res, 200, {
+      const player =
+        requirePlayer(req, res);
 
-            army: {
+      if (!player) return;
 
-                ground:
-                    player.ground || 0,
-
-                air:
-                    player.air || 0,
-
-                defense:
-                    player.defense || 100,
-
-                offensiveLevel:
-                    player.offensiveLevel || 1
-            }
-        });
+      return send(res, 200, {
+        army: {
+          offensiveLevel:
+            player.offensiveLevel,
+          defense:
+            player.defense
+        }
+      });
     }
 
     if (
-        method === "POST" &&
-        path === "/api/army/upgrade"
+      req.method === "POST" &&
+      path === "/api/army/update"
     ) {
 
-        const quantity =
-            Math.max(
-                1,
-                Number(body.quantity) || 1
-            );
+      const player =
+        requirePlayer(req, res);
 
-        const cost =
-            quantity * 500;
+      if (!player) return;
 
-        if (
-            player.cash <
-            cost
-        ) {
+      player.offensiveLevel =
+        Math.max(
+          1,
+          Number(
+            body.offensiveLevel ||
+            player.offensiveLevel
+          )
+        );
 
-            return send(res, 400, {
-                error:
-                    "insufficient cash"
-            });
+      player.defense =
+        Math.max(
+          0,
+          Number(
+            body.defense ||
+            player.defense
+          )
+        );
+
+      return send(res, 200, {
+        ok: true,
+        army: {
+          offensiveLevel:
+            player.offensiveLevel,
+          defense:
+            player.defense
         }
+      });
+    }
 
-        player.cash -= cost;
+    /* =====================================================
+       WARS
+       ===================================================== */
 
-        player.ground =
-            (player.ground || 0) +
-            quantity;
+    if (
+      req.method === "GET" &&
+      path === "/api/wars"
+    ) {
 
-        player.defense =
-            (player.defense || 100) +
-            quantity;
+      return send(res, 200, {
+        wars: db.wars
+      });
+    }
 
-        return send(res, 200, {
+    if (
+      req.method === "POST" &&
+      path === "/api/wars/attack"
+    ) {
 
-            ok: true,
+      const attacker =
+        requirePlayer(req, res);
 
-            cash:
-                player.cash,
+      if (!attacker) return;
 
-            army: {
+      const target =
+        db.players.find(
+          p =>
+            p.id ===
+            Number(body.targetId)
+        );
 
-                ground:
-                    player.ground,
-
-                air:
-                    player.air || 0,
-
-                defense:
-                    player.defense,
-
-                offensiveLevel:
-                    player.offensiveLevel || 1
-            }
+      if (!target) {
+        return send(res, 404, {
+          error: "target not found"
         });
+      }
+
+      const attackerPower =
+        attacker.offensiveLevel * 100 +
+        Math.random() * 100;
+
+      const defenderPower =
+        target.defense +
+        Math.random() * 100;
+
+      const attackerWon =
+        attackerPower >= defenderPower;
+
+      const war = {
+        id: db.nextWarId++,
+        attackerId: attacker.id,
+        defenderId: target.id,
+        attackerWon,
+        createdAt:
+          new Date().toISOString()
+      };
+
+      db.wars.push(war);
+
+      return send(res, 200, {
+        ok: true,
+        result: war
+      });
     }
 
     /* =====================================================
@@ -1117,67 +1146,66 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/loans"
+      req.method === "GET" &&
+      path === "/api/loans"
     ) {
 
-        return send(res, 200, {
-            loans:
-                db.loans.filter(
-                    loan =>
-                        loan.playerId ===
-                        player.id
-                )
-        });
+      const player =
+        requirePlayer(req, res);
+
+      if (!player) return;
+
+      return send(res, 200, {
+        loans:
+          db.loans.filter(
+            l =>
+              l.playerId === player.id
+          )
+      });
     }
 
     if (
-        method === "POST" &&
-        path === "/api/loans"
+      req.method === "POST" &&
+      path === "/api/loans/take"
     ) {
 
-        const amount =
-            Math.max(
-                10000,
-                Math.min(
-                    10000000,
-                    Number(body.amount) ||
-                    10000
-                )
-            );
+      const player =
+        requirePlayer(req, res);
 
-        const loan = {
+      if (!player) return;
 
-            id:
-                db.nextId++,
+      const amount =
+        Number(body.amount || 0);
 
-            playerId:
-                player.id,
-
-            amount,
-
-            due:
-                amount * 1.1,
-
-            paid:
-                false,
-
-            createdAt:
-                Date.now()
-        };
-
-        db.loans.push(
-            loan
-        );
-
-        player.cash +=
-            amount;
-
-        return send(res, 200, {
-            loan,
-            cash:
-                player.cash
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return send(res, 400, {
+          error: "invalid loan amount"
         });
+      }
+
+      const loan = {
+        id:
+          db.loans.length + 1,
+        playerId: player.id,
+        amount,
+        remaining:
+          amount * 1.1,
+        createdAt:
+          new Date().toISOString()
+      };
+
+      db.loans.push(loan);
+
+      player.cash += amount;
+
+      return send(res, 200, {
+        ok: true,
+        loan,
+        cash: player.cash
+      });
     }
 
     /* =====================================================
@@ -1185,48 +1213,39 @@ async function route(req, res) {
        ===================================================== */
 
     if (
-        method === "GET" &&
-        path === "/api/missions"
+      req.method === "GET" &&
+      path === "/api/missions"
     ) {
 
-        const hasBusiness =
-            db.assets.some(
-                asset =>
-                    asset.ownerId ===
-                    player.id &&
-                    asset.category ===
-                    "business"
-            );
+      const player =
+        requirePlayer(req, res);
 
-        return send(res, 200, {
+      if (!player) return;
 
-            missions: [
-
-                {
-                    id: 1,
-                    name:
-                        "First Business",
-                    reward:
-                        25000,
-                    done:
-                        hasBusiness
-                },
-
-                {
-                    id: 2,
-                    name:
-                        "Build Your Empire",
-                    reward:
-                        100000,
-                    done:
-                        db.assets.filter(
-                            asset =>
-                                asset.ownerId ===
-                                player.id
-                        ).length >= 5
-                }
-            ]
-        });
+      return send(res, 200, {
+        missions: [
+          {
+            id: 1,
+            title: "Buy your first business",
+            reward: 1000,
+            completed:
+              (player.assets || []).length > 0
+          },
+          {
+            id: 2,
+            title: "Reach level 2",
+            reward: 5000,
+            completed:
+              player.level >= 2
+          },
+          {
+            id: 3,
+            title: "Collect income",
+            reward: 2500,
+            completed: false
+          }
+        ]
+      });
     }
 
     /* =====================================================
@@ -1234,45 +1253,21 @@ async function route(req, res) {
        ===================================================== */
 
     return send(res, 404, {
-        error:
-            "endpoint not found"
+      error: "endpoint not found",
+      path
     });
-}
+  }
+);
 
 /* =========================================================
-   CREATE SERVER
+   START SERVER
    ========================================================= */
 
-const server =
-    http.createServer(
-        async (req, res) => {
-
-            try {
-
-                await route(
-                    req,
-                    res
-                );
-
-            } catch (error) {
-
-                console.error(error);
-
-                send(res, 500, {
-                    error:
-                        error.message ||
-                        "internal server error"
-                });
-            }
-        }
-    );
-
 server.listen(
-    PORT,
-    () => {
-        console.log(
-            "Entrepreneur Empire server running on port " +
-            PORT
-        );
-    }
+  PORT,
+  () => {
+    console.log(
+      `Tycoon Empire server v${VERSION} running on port ${PORT}`
+    );
+  }
 );
