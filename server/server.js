@@ -497,7 +497,7 @@ async function initDatabase() {
     await query(`
         CREATE TABLE IF NOT EXISTS running_contracts (
             id TEXT PRIMARY KEY,
-            contract_id TEXT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            contract_id TEXT NOT NULL,
             player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             reward BIGINT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
