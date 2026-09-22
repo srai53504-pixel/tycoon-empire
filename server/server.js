@@ -1,80 +1,20 @@
-/*
-============================================================
- TYCOON EMPIRE - PRIVATE MULTIPLAYER SERVER
-============================================================
+'use strict';
 
- Node.js + Express-style HTTP server + PostgreSQL
-
- Existing Android client:
-     https://tycoon-empire-i40v.onrender.com
-
- Main systems:
- - Authentication
- - Persistent PostgreSQL accounts
- - Businesses
- - Transportation
- - Concessions
- - Resources
- - Subsidiaries
- - Research
- - Production technology
- - Products market
- - Properties
- - Stock market
- - World sites
- - Contracts
- - Contract bidding
- - Alliances
- - Chat
- - Rankings
- - Loans
- - Army
- - Wars
- - Country relations
- - Marketing
- - Business Center
- - Challenges
- - CEO upgrades
- - Collections
- - Special items
- - Space program
- - Congress
- - Missions
- - Offline income
- - Level progression
-
- Reference catalog:
- Document 7.pdf supplied by the user.
-============================================================
-*/
-
-"use strict";
-
-const http = require("http");
-const crypto = require("crypto");
-const { Pool } = require("pg");
-const { URL } = require("url");
-
-/* =========================================================
-   CONFIG
-========================================================= */
+const http = require('http');
+const crypto = require('crypto');
+const { Pool } = require('pg');
 
 const PORT = Number(process.env.PORT || 8080);
+const VERSION = '2.2.1';
 
-const VERSION = "2.2.0";
-
-const DATABASE_URL = process.env.DATABASE_URL;
-
-if (!DATABASE_URL) {
-    console.error("DATABASE_URL is missing.");
+if (!process.env.DATABASE_URL) {
+    console.error('DATABASE_URL is missing.');
     process.exit(1);
 }
 
 const pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
-    },
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000
@@ -84,160 +24,74 @@ const pool = new Pool({
    BASIC HELPERS
 ========================================================= */
 
+function now() {
+    return new Date();
+}
+
+function id() {
+    return crypto.randomUUID();
+}
+
+function hashPassword(password) {
+    return crypto
+        .createHash('sha256')
+        .update(String(password))
+        .digest('hex');
+}
+
+function token() {
+    return crypto.randomBytes(48).toString('hex');
+}
+
 function json(res, status, data) {
-    const body = JSON.stringify(data);
+    const out = JSON.stringify(data);
 
     res.writeHead(status, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers":
-            "Content-Type, Authorization",
-        "Access-Control-Allow-Methods":
-            "GET, POST, PUT, DELETE, OPTIONS"
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(out),
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
     });
 
-    res.end(body);
+    res.end(out);
 }
 
 function error(res, status, message, extra = {}) {
     return json(res, status, {
-        ok: false,
+        success: false,
         error: message,
         ...extra
     });
 }
 
-function send(res, status, data) {
-    return json(res, status, data);
-}
-
-function now() {
-    return new Date();
-}
-
-function money(value) {
-    return Math.max(0, Math.round(Number(value || 0)));
-}
-
-function normalize(value) {
-    return String(value || "")
-        .trim()
-        .toLowerCase()
-        .replace(/[_-]+/g, " ")
-        .replace(/\s+/g, " ");
-}
-
-function randomId(bytes = 16) {
-    return crypto.randomBytes(bytes).toString("hex");
-}
-
-function sha256(value) {
-    return crypto
-        .createHash("sha256")
-        .update(String(value))
-        .digest("hex");
-}
-
-function hashPassword(password) {
+async function body(req) {
     return new Promise((resolve, reject) => {
-        const salt = crypto.randomBytes(16).toString("hex");
+        let data = '';
 
-        crypto.scrypt(
-            String(password),
-            salt,
-            64,
-            (err, derivedKey) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
-
-                resolve(
-                    `${salt}:${derivedKey.toString("hex")}`
-                );
-            }
-        );
-    });
-}
-
-function verifyPassword(password, stored) {
-    return new Promise((resolve, reject) => {
-        if (!stored || !stored.includes(":")) {
-            resolve(false);
-            return;
-        }
-
-        const [salt, hash] = stored.split(":");
-
-        crypto.scrypt(
-            String(password),
-            salt,
-            64,
-            (err, derivedKey) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
-
-                const a = Buffer.from(hash, "hex");
-                const b = derivedKey;
-
-                if (a.length !== b.length) {
-                    resolve(false);
-                    return;
-                }
-
-                resolve(
-                    crypto.timingSafeEqual(a, b)
-                );
-            }
-        );
-    });
-}
-
-function bearerToken(req) {
-    const header =
-        req.headers.authorization || "";
-
-    if (!header.startsWith("Bearer ")) {
-        return "";
-    }
-
-    return header.substring(7).trim();
-}
-
-function readBody(req) {
-    return new Promise((resolve, reject) => {
-        let data = "";
-
-        req.on("data", chunk => {
+        req.on('data', chunk => {
             data += chunk;
 
             if (data.length > 2 * 1024 * 1024) {
-                reject(
-                    new Error("Request body too large")
-                );
-
+                reject(new Error('Request too large'));
                 req.destroy();
             }
         });
 
-        req.on("end", () => {
-            if (!data.trim()) {
+        req.on('end', () => {
+            if (!data) {
                 resolve({});
                 return;
             }
 
             try {
                 resolve(JSON.parse(data));
-            } catch (e) {
-                reject(
-                    new Error("Invalid JSON")
-                );
+            } catch {
+                resolve({});
             }
         });
 
-        req.on("error", reject);
+        req.on('error', reject);
     });
 }
 
@@ -249,5657 +103,2518 @@ async function transaction(callback) {
     const client = await pool.connect();
 
     try {
-        await client.query("BEGIN");
-
-        const result =
-            await callback(client);
-
-        await client.query("COMMIT");
-
+        await client.query('BEGIN');
+        const result = await callback(client);
+        await client.query('COMMIT');
         return result;
-    } catch (err) {
-        await client.query("ROLLBACK");
-        throw err;
+    } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
     } finally {
         client.release();
     }
 }
 
-/* =========================================================
-   REFERENCE CATALOG
-========================================================= */
+function authHeader(req) {
+    const h = req.headers.authorization || '';
 
-function item(
-    id,
-    name,
-    price = null,
-    options = {}
-) {
-    return {
-        id,
-        name,
-        price,
-        image:
-            options.image ||
-            `reference/${id}.jpg`,
-        category:
-            options.category || null,
-        unlockLevel:
-            options.unlockLevel ?? 1,
-        concession:
-            options.concession ?? null,
-        research:
-            options.research ?? null,
-        productionTech:
-            options.productionTech ?? null,
-        requirement:
-            options.requirement ?? null,
-        sourcePage:
-            options.sourcePage ?? null
-    };
+    if (!h.startsWith('Bearer ')) {
+        return '';
+    }
+
+    return h.substring(7).trim();
+}
+
+async function authPlayer(req) {
+    const t = authHeader(req);
+
+    if (!t) {
+        return null;
+    }
+
+    const result = await query(
+        `
+        SELECT p.*
+        FROM sessions s
+        JOIN players p ON p.id = s.player_id
+        WHERE s.token = $1
+          AND (s.expires_at IS NULL OR s.expires_at > NOW())
+        LIMIT 1
+        `,
+        [t]
+    );
+
+    if (!result.rows.length) {
+        return null;
+    }
+
+    return result.rows[0];
+}
+
+function requirePlayer(req, res) {
+    return authPlayer(req).then(player => {
+        if (!player) {
+            error(res, 401, 'Authentication required');
+            return null;
+        }
+
+        return player;
+    });
+}
+
+function num(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function money(value) {
+    return Math.round(num(value));
+}
+
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
+function safeName(value, fallback = 'Player') {
+    const s = String(value || '').trim();
+
+    if (!s) return fallback;
+
+    return s.substring(0, 50);
 }
 
 /* =========================================================
-   BUSINESSES
+   CATALOG
 ========================================================= */
+
+const COUNTRIES = [
+    { id: 'india', name: 'India', bonus: 1.00 },
+    { id: 'usa', name: 'United States', bonus: 1.02 },
+    { id: 'uk', name: 'United Kingdom', bonus: 1.01 },
+    { id: 'germany', name: 'Germany', bonus: 1.03 },
+    { id: 'japan', name: 'Japan', bonus: 1.04 },
+    { id: 'china', name: 'China', bonus: 1.02 },
+    { id: 'canada', name: 'Canada', bonus: 1.01 },
+    { id: 'australia', name: 'Australia', bonus: 1.02 },
+    { id: 'france', name: 'France', bonus: 1.02 },
+    { id: 'brazil', name: 'Brazil', bonus: 1.01 }
+];
+
+const TRANSPORTS = [
+    { id: 'bicycle', name: 'Bicycle', price: 1000, income: 100, level: 1 },
+    { id: 'motorcycle', name: 'Motorcycle', price: 10000, income: 800, level: 1 },
+    { id: 'taxi', name: 'Taxi', price: 50000, income: 3500, level: 2 },
+    { id: 'bus', name: 'Bus', price: 150000, income: 10000, level: 3 },
+    { id: 'truck', name: 'Truck', price: 300000, income: 18000, level: 4 },
+    { id: 'train', name: 'Train', price: 1200000, income: 70000, level: 6 },
+    { id: 'ship', name: 'Ship', price: 5000000, income: 250000, level: 8 },
+    { id: 'cargo_ship', name: 'Cargo Ship', price: 15000000, income: 700000, level: 10 },
+    { id: 'airplane', name: 'Airplane', price: 30000000, income: 1500000, level: 12 },
+    { id: 'cargo_plane', name: 'Cargo Plane', price: 70000000, income: 3500000, level: 14 }
+];
 
 const BUSINESSES = [
-    item(
-        "pub",
-        "Pub",
-        200,
-        {
-            category: "business",
-            sourcePage: 1
-        }
-    ),
-
-    item(
-        "dance_club",
-        "Dance club",
-        220,
-        {
-            category: "business",
-            sourcePage: 1
-        }
-    ),
-
-    item(
-        "coffee_shop",
-        "Coffee shop",
-        150,
-        {
-            category: "business",
-            sourcePage: 1
-        }
-    ),
-
-    item(
-        "restaurant",
-        "Restaurant",
-        220,
-        {
-            category: "business",
-            sourcePage: 1
-        }
-    ),
-
-    item(
-        "movie_theater",
-        "Movie theater",
-        350,
-        {
-            category: "business",
-            sourcePage: 1
-        }
-    ),
-
-    item(
-        "clothes_shop",
-        "Clothes shop",
-        150,
-        {
-            category: "business",
-            sourcePage: 2
-        }
-    ),
-
-    item(
-        "supermarket",
-        "Supermarket",
-        250,
-        {
-            category: "business",
-            sourcePage: 2
-        }
-    ),
-
-    item(
-        "fast_food",
-        "Fast food",
-        150,
-        {
-            category: "business",
-            sourcePage: 2
-        }
-    ),
-
-    item(
-        "living_building",
-        "Living building",
-        null,
-        {
-            category: "business",
-            concession: "Real Estate",
-            sourcePage: 2
-        }
-    ),
-
-    item(
-        "office_building",
-        "Office building",
-        null,
-        {
-            category: "business",
-            concession: "Real Estate",
-            sourcePage: 2
-        }
-    ),
-
-    item(
-        "fighter_plane",
-        "Fighter plane",
-        null,
-        {
-            category: "business",
-            concession: "War Industry",
-            sourcePage: 3
-        }
-    ),
-
-    item(
-        "espionage_satellite",
-        "Espionage Satellite",
-        null,
-        {
-            category: "business",
-            concession: "Space",
-            sourcePage: 3
-        }
-    ),
-
-    item(
-        "communication_satellite",
-        "Communication Satellite",
-        null,
-        {
-            category: "business",
-            concession: "Space",
-            sourcePage: 3
-        }
-    ),
-
-    item(
-        "defence_robot",
-        "Defence Robot",
-        null,
-        {
-            category: "business",
-            concession: "Robotics",
-            sourcePage: 3
-        }
-    ),
-
-    item(
-        "industrial_bots",
-        "Industrial Bots",
-        null,
-        {
-            category: "business",
-            concession: "Robotics",
-            sourcePage: 3
-        }
-    ),
-
-    item(
-        "ballistic_missiles",
-        "Ballistic missiles",
-        null,
-        {
-            category: "business",
-            concession: "Nuclear",
-            sourcePage: 4
-        }
-    ),
-
-    item(
-        "smart_bombs",
-        "Smart bombs",
-        null,
-        {
-            category: "business",
-            concession: "Nuclear",
-            sourcePage: 4
-        }
-    ),
-
-    item(
-        "ktz29000",
-        "KTZ29000",
-        null,
-        {
-            category: "business",
-            concession: "Advanced War",
-            sourcePage: 4
-        }
-    ),
-
-    item(
-        "ztz9600",
-        "ZTZ9600",
-        null,
-        {
-            category: "business",
-            concession: "Advanced War",
-            sourcePage: 4
-        }
-    )
+    { id: 'street_food', name: 'Street Food', price: 5000, income: 300, level: 1 },
+    { id: 'grocery', name: 'Grocery Store', price: 25000, income: 1500, level: 1 },
+    { id: 'restaurant', name: 'Restaurant', price: 75000, income: 4500, level: 2 },
+    { id: 'hotel', name: 'Hotel', price: 300000, income: 18000, level: 4 },
+    { id: 'factory', name: 'Factory', price: 750000, income: 50000, level: 6 },
+    { id: 'mall', name: 'Shopping Mall', price: 2500000, income: 150000, level: 8 },
+    { id: 'bank', name: 'Bank', price: 10000000, income: 650000, level: 10 },
+    { id: 'tech_company', name: 'Technology Company', price: 30000000, income: 2200000, level: 12 },
+    { id: 'energy_company', name: 'Energy Company', price: 75000000, income: 6000000, level: 14 },
+    { id: 'global_corporation', name: 'Global Corporation', price: 200000000, income: 18000000, level: 15 }
 ];
-
-/* =========================================================
-   TRANSPORTATION
-========================================================= */
-
-const TRANSPORTATION = [
-    item(
-        "taxi",
-        "Taxi",
-        100,
-        {
-            category: "transportation",
-            sourcePage: 5
-        }
-    ),
-
-    item(
-        "bus",
-        "Bus",
-        150,
-        {
-            category: "transportation",
-            sourcePage: 5
-        }
-    ),
-
-    item(
-        "train",
-        "Train",
-        250,
-        {
-            category: "transportation",
-            sourcePage: 5
-        }
-    ),
-
-    item(
-        "vip_limousines",
-        "VIP Limousines",
-        500,
-        {
-            category: "transportation",
-            sourcePage: 5
-        }
-    ),
-
-    item(
-        "passenger_plane",
-        "Passengers plane",
-        800,
-        {
-            category: "transportation",
-            sourcePage: 5
-        }
-    ),
-
-    item(
-        "cargo_plane",
-        "Cargo plane",
-        850,
-        {
-            category: "transportation",
-            sourcePage: 6
-        }
-    ),
-
-    item(
-        "passenger_ship",
-        "Passengers ship",
-        null,
-        {
-            category: "transportation",
-            concession: "Sea Lines",
-            sourcePage: 6
-        }
-    ),
-
-    item(
-        "cargo_ship",
-        "Cargo ship",
-        null,
-        {
-            category: "transportation",
-            concession: "Sea Lines",
-            sourcePage: 6
-        }
-    )
-];
-
-/* =========================================================
-   CONCESSIONS
-========================================================= */
 
 const CONCESSIONS = [
-    item(
-        "ground_transport",
-        "Ground Transport",
-        25000,
-        {
-            category: "concession",
-            sourcePage: 7
-        }
-    ),
-
-    item(
-        "commerce",
-        "Commerce",
-        30000,
-        {
-            category: "concession",
-            sourcePage: 7
-        }
-    ),
-
-    item(
-        "leisure",
-        "Leisure",
-        75000,
-        {
-            category: "concession",
-            sourcePage: 7
-        }
-    ),
-
-    item(
-        "air_lines",
-        "Air Lines",
-        150000,
-        {
-            category: "concession",
-            sourcePage: 7
-        }
-    ),
-
-    item(
-        "sea_lines",
-        "Sea Lines",
-        400000,
-        {
-            category: "concession",
-            sourcePage: 7
-        }
-    ),
-
-    item(
-        "real_estate",
-        "Real Estate",
-        800000,
-        {
-            category: "concession",
-            sourcePage: 7
-        }
-    ),
-
-    item(
-        "war_industry",
-        "War Industry",
-        1000000,
-        {
-            category: "concession",
-            sourcePage: 8
-        }
-    ),
-
-    item(
-        "space",
-        "Space",
-        2000000,
-        {
-            category: "concession",
-            sourcePage: 8
-        }
-    ),
-
-    item(
-        "robotics",
-        "Robotics",
-        5000000,
-        {
-            category: "concession",
-            sourcePage: 8
-        }
-    ),
-
-    item(
-        "nuclear",
-        "Nuclear",
-        10000000,
-        {
-            category: "concession",
-            sourcePage: 8
-        }
-    ),
-
-    item(
-        "advanced_war",
-        "Advanced war",
-        50000000,
-        {
-            category: "concession",
-            sourcePage: 8
-        }
-    )
+    { id: 'food_concession', name: 'Food Concession', price: 25000, income: 1200, level: 2 },
+    { id: 'transport_concession', name: 'Transport Concession', price: 100000, income: 6000, level: 4 },
+    { id: 'retail_concession', name: 'Retail Concession', price: 300000, income: 20000, level: 6 },
+    { id: 'airport_concession', name: 'Airport Concession', price: 2500000, income: 150000, level: 9 },
+    { id: 'port_concession', name: 'Port Concession', price: 7500000, income: 500000, level: 11 }
 ];
-
-/* =========================================================
-   RESOURCES
-========================================================= */
-
-const RESOURCES = [
-    item(
-        "salt",
-        "Salt",
-        93,
-        {
-            category: "resource",
-            sourcePage: 9
-        }
-    ),
-
-    item(
-        "iron",
-        "Iron",
-        157,
-        {
-            category: "resource",
-            sourcePage: 9
-        }
-    ),
-
-    item(
-        "aluminum",
-        "Aluminum",
-        30,
-        {
-            category: "resource",
-            sourcePage: 9
-        }
-    ),
-
-    item(
-        "copper",
-        "Copper",
-        202,
-        {
-            category: "resource",
-            sourcePage: 9
-        }
-    ),
-
-    item(
-        "silver",
-        "Silver",
-        242,
-        {
-            category: "resource",
-            sourcePage: 9
-        }
-    ),
-
-    item(
-        "oil",
-        "Oil",
-        588,
-        {
-            category: "resource",
-            sourcePage: 9
-        }
-    ),
-
-    item(
-        "gold",
-        "Gold",
-        201,
-        {
-            category: "resource",
-            sourcePage: 10
-        }
-    ),
-
-    item(
-        "diamonds",
-        "Diamonds",
-        286,
-        {
-            category: "resource",
-            sourcePage: 10
-        }
-    ),
-
-    item(
-        "gems",
-        "Gems",
-        880,
-        {
-            category: "resource",
-            sourcePage: 10
-        }
-    )
-];
-
-/* =========================================================
-   SUBSIDIARIES
-========================================================= */
 
 const SUBSIDIARIES = [
-    item(
-        "mining_company",
-        "Mining company",
-        15000,
-        {
-            category: "subsidiary",
-            requirement: "Level 1",
-            sourcePage: 11
-        }
-    ),
-
-    item(
-        "traveling_company",
-        "Traveling company",
-        45000,
-        {
-            category: "subsidiary",
-            requirement: "Level 2",
-            sourcePage: 11
-        }
-    ),
-
-    item(
-        "soccer_team",
-        "Soccer team",
-        30000,
-        {
-            category: "subsidiary",
-            requirement: "Level 1",
-            sourcePage: 11
-        }
-    ),
-
-    item(
-        "brokerage_company",
-        "Brokerage company",
-        300000,
-        {
-            category: "subsidiary",
-            requirement: "Level 1",
-            sourcePage: 11
-        }
-    ),
-
-    item(
-        "army_experiments",
-        "Army experiments",
-        150000,
-        {
-            category: "subsidiary",
-            sourcePage: 11
-        }
-    ),
-
-    item(
-        "robotics_program",
-        "Robotics program",
-        350000,
-        {
-            category: "subsidiary",
-            sourcePage: 12
-        }
-    ),
-
-    item(
-        "nuclear_program",
-        "Nuclear program",
-        500000,
-        {
-            category: "subsidiary",
-            sourcePage: 12
-        }
-    ),
-
-    item(
-        "advanced_medical",
-        "Advanced medical",
-        null,
-        {
-            category: "subsidiary",
-            requirement: "35 gold coins",
-            sourcePage: 12
-        }
-    ),
-
-    item(
-        "space_center",
-        "Space center",
-        null,
-        {
-            category: "subsidiary",
-            requirement: "35 gold coins",
-            sourcePage: 12
-        }
-    )
+    { id: 'local_subsidiary', name: 'Local Subsidiary', price: 500000, income: 25000, level: 5 },
+    { id: 'regional_subsidiary', name: 'Regional Subsidiary', price: 3000000, income: 175000, level: 8 },
+    { id: 'international_subsidiary', name: 'International Subsidiary', price: 15000000, income: 1000000, level: 11 },
+    { id: 'global_subsidiary', name: 'Global Subsidiary', price: 75000000, income: 6000000, level: 14 }
 ];
 
-/* =========================================================
-   RESEARCH
-========================================================= */
-
-const RESEARCH = [
-    item(
-        "expert_accountants",
-        "Expert Accountants",
-        null,
-        {
-            category: "research",
-            requirement: "10 coins; level 6",
-            sourcePage: 13
-        }
-    ),
-
-    item(
-        "business_executives",
-        "Business Executives",
-        null,
-        {
-            category: "research",
-            requirement: "10 coins; level 1",
-            sourcePage: 13
-        }
-    ),
-
-    item(
-        "co_ceo",
-        "Co CEO",
-        null,
-        {
-            category: "research",
-            requirement: "15 coins; level 1",
-            sourcePage: 13
-        }
-    ),
-
-    item(
-        "executives_airplane",
-        "Executives airplane",
-        null,
-        {
-            category: "research",
-            requirement: "35 coins",
-            sourcePage: 13
-        }
-    ),
-
-    item(
-        "leisure_ferries",
-        "Leisure ferries",
-        null,
-        {
-            category: "research",
-            requirement: "40 coins",
-            sourcePage: 13
-        }
-    ),
-
-    item(
-        "space_traveling_shuttle",
-        "Space traveling shuttle",
-        null,
-        {
-            category: "research",
-            requirement: "40 coins",
-            sourcePage: 13
-        }
-    )
+const INVESTMENTS = [
+    { id: 'bonds', name: 'Corporate Bonds', price: 100000, income: 2500, level: 2 },
+    { id: 'mutual_fund', name: 'Mutual Fund', price: 500000, income: 15000, level: 4 },
+    { id: 'venture_capital', name: 'Venture Capital', price: 2500000, income: 100000, level: 7 },
+    { id: 'private_equity', name: 'Private Equity', price: 10000000, income: 500000, level: 10 }
 ];
-
-/* =========================================================
-   PRODUCTION TECHNOLOGY
-========================================================= */
-
-const PRODUCTION_TECH = [
-    item(
-        "spa_products",
-        "Spa Products",
-        3025,
-        {
-            category: "product",
-            productionTech: 1,
-            sourcePage: 26
-        }
-    ),
-
-    item(
-        "silverware",
-        "Silverware",
-        6490,
-        {
-            category: "product",
-            productionTech: 3,
-            sourcePage: 27
-        }
-    ),
-
-    item(
-        "remote_control_cars",
-        "Remote Control Cars",
-        7150,
-        {
-            category: "product",
-            productionTech: 5,
-            sourcePage: 27
-        }
-    ),
-
-    item(
-        "gold_plated_watch",
-        "Gold Plated Watch",
-        9185,
-        {
-            category: "product",
-            productionTech: 7,
-            sourcePage: 27
-        }
-    ),
-
-    item(
-        "iron_furnitures",
-        "Iron Furniture's",
-        8992,
-        {
-            category: "product",
-            productionTech: 9,
-            sourcePage: 28
-        }
-    ),
-
-    item(
-        "cameras",
-        "Cameras",
-        10835,
-        {
-            category: "product",
-            productionTech: 11,
-            sourcePage: 28
-        }
-    ),
-
-    item(
-        "diamonds_jewellery",
-        "Diamonds Jewellery",
-        44000,
-        {
-            category: "product",
-            productionTech: 13,
-            sourcePage: 29
-        }
-    ),
-
-    item(
-        "gemstones",
-        "Gemstones",
-        29150,
-        {
-            category: "product",
-            productionTech: 15,
-            sourcePage: 29
-        }
-    ),
-
-    item(
-        "luxury_jewelry",
-        "Luxury-Jewelry",
-        44000,
-        {
-            category: "product",
-            productionTech: 16,
-            sourcePage: 30
-        }
-    ),
-
-    item(
-        "computers",
-        "Computers",
-        28875,
-        {
-            category: "product",
-            productionTech: 17,
-            sourcePage: 30
-        }
-    ),
-
-    item(
-        "smartphones",
-        "Smart-phones",
-        24420,
-        {
-            category: "product",
-            productionTech: 19,
-            sourcePage: 31
-        }
-    ),
-
-    item(
-        "gaming_consoles",
-        "Gaming Consoles",
-        25575,
-        {
-            category: "product",
-            productionTech: 21,
-            sourcePage: 31
-        }
-    ),
-
-    item(
-        "family_cars",
-        "Family Cars",
-        40425,
-        {
-            category: "product",
-            productionTech: 23,
-            sourcePage: 32
-        }
-    ),
-
-    item(
-        "sports_cars",
-        "Sports Cars",
-        49280,
-        {
-            category: "product",
-            productionTech: 25,
-            sourcePage: 32
-        }
-    ),
-
-    item(
-        "advanced_tactical_weapons",
-        "Advanced Tactical Weapons",
-        67100,
-        {
-            category: "product",
-            productionTech: 27,
-            sourcePage: 33
-        }
-    ),
-
-    item(
-        "armored_vehicles",
-        "Armored Vehicles",
-        66550,
-        {
-            category: "product",
-            productionTech: 29,
-            sourcePage: 33
-        }
-    )
-];
-
-/* =========================================================
-   PRODUCT MARKET
-========================================================= */
-
-const PRODUCTS = [
-    item(
-        "spa_products_market",
-        "Spa Products",
-        3025,
-        {
-            category: "product_market",
-            productionTech: 1,
-            sourcePage: 39
-        }
-    ),
-
-    item(
-        "silverware_market",
-        "Silverware",
-        6490,
-        {
-            category: "product_market",
-            productionTech: 3,
-            sourcePage: 39
-        }
-    ),
-
-    item(
-        "remote_control_cars_market",
-        "Remote Control Cars",
-        7150,
-        {
-            category: "product_market",
-            productionTech: 5,
-            sourcePage: 39
-        }
-    ),
-
-    item(
-        "gold_plated_watch_market",
-        "Gold Plated Watch",
-        9185,
-        {
-            category: "product_market",
-            productionTech: 7,
-            sourcePage: 39
-        }
-    ),
-
-    item(
-        "iron_furniture_market",
-        "Iron Furniture's",
-        8992,
-        {
-            category: "product_market",
-            productionTech: 9,
-            sourcePage: 39
-        }
-    ),
-
-    item(
-        "cameras_market",
-        "Cameras",
-        10835,
-        {
-            category: "product_market",
-            productionTech: 11,
-            sourcePage: 39
-        }
-    ),
-
-    item(
-        "diamonds_jewellery_market",
-        "Diamonds Jewellery",
-        44000,
-        {
-            category: "product_market",
-            productionTech: 13,
-            sourcePage: 39
-        }
-    ),
-
-    item(
-        "gemstones_market",
-        "Gemstones",
-        29150,
-        {
-            category: "product_market",
-            productionTech: 15,
-            sourcePage: 40
-        }
-    ),
-
-    item(
-        "luxury_jewelry_market",
-        "luxury-jewelry",
-        44000,
-        {
-            category: "product_market",
-            productionTech: 16,
-            sourcePage: 40
-        }
-    ),
-
-    item(
-        "computers_market",
-        "Computers",
-        28875,
-        {
-            category: "product_market",
-            productionTech: 17,
-            sourcePage: 40
-        }
-    ),
-
-    item(
-        "smartphones_market",
-        "Smart-phones",
-        24420,
-        {
-            category: "product_market",
-            productionTech: 19,
-            sourcePage: 40
-        }
-    ),
-
-    item(
-        "gaming_consoles_market",
-        "Gaming Consoles",
-        25575,
-        {
-            category: "product_market",
-            productionTech: 21,
-            sourcePage: 40
-        }
-    ),
-
-    item(
-        "family_cars_market",
-        "Family Cars",
-        40425,
-        {
-            category: "product_market",
-            productionTech: 23,
-            sourcePage: 40
-        }
-    ),
-
-    item(
-        "sports_cars_market",
-        "Sports Cars",
-        49280,
-        {
-            category: "product_market",
-            productionTech: 25,
-            sourcePage: 41
-        }
-    ),
-
-    item(
-        "advanced_tactical_weapons_market",
-        "Advanced Tactical Weapons",
-        67100,
-        {
-            category: "product_market",
-            productionTech: 27,
-            sourcePage: 41
-        }
-    ),
-
-    item(
-        "armored_vehicles_market",
-        "Armored Vehicles",
-        66550,
-        {
-            category: "product_market",
-            productionTech: 29,
-            sourcePage: 41
-        }
-    )
-];
-
-/* =========================================================
-   PROPERTIES
-========================================================= */
 
 const PROPERTIES = [
-    item(
-        "new_century_global_center",
-        "New Century Global Center",
-        300000,
-        {
-            category: "property",
-            sourcePage: 42
-        }
-    ),
-
-    item(
-        "mid_valley_megamall",
-        "Mid Valley Megamall",
-        null,
-        {
-            category: "property",
-            sourcePage: 42
-        }
-    ),
-
-    item(
-        "neva_towers_2",
-        "Neva Towers 2",
-        500000,
-        {
-            category: "property",
-            sourcePage: 43
-        }
-    ),
-
-    item(
-        "q1",
-        "Q1",
-        500000,
-        {
-            category: "property",
-            sourcePage: 44
-        }
-    ),
-
-    item(
-        "rotterdam_harbour",
-        "Rotterdam Harbour",
-        350000,
-        {
-            category: "property",
-            sourcePage: 45
-        }
-    ),
-
-    item(
-        "cedar_crossing_industrial_park",
-        "Cedar Crossing Industrial Park",
-        500000,
-        {
-            category: "property",
-            sourcePage: 46
-        }
-    ),
-
-    item(
-        "autonomous_taxi_factory",
-        "Autonomous Taxi Factory",
-        null,
-        {
-            category: "property",
-            requirement:
-                "Premium property unlocks Driver-Less transport unit",
-            sourcePage: 47
-        }
-    ),
-
-    item(
-        "princess_tower",
-        "Princess Tower",
-        15000000,
-        {
-            category: "property",
-            unlockLevel: 8,
-            sourcePage: 47
-        }
-    ),
-
-    item(
-        "abraj_al_bait",
-        "Abraj Al-Bait",
-        10000000,
-        {
-            category: "property",
-            unlockLevel: 8,
-            sourcePage: 48
-        }
-    ),
-
-    item(
-        "boeing_everett",
-        "Boeing Everett Factory",
-        25000000,
-        {
-            category: "property",
-            unlockLevel: 8,
-            sourcePage: 49
-        }
-    ),
-
-    item(
-        "unmanned_aerial_vehicle_factory",
-        "Unmanned Aerial Vehicle Factory",
-        null,
-        {
-            category: "property",
-            unlockLevel: 8,
-            requirement:
-                "Premium property unlocks UAV Army Unit",
-            sourcePage: 49
-        }
-    ),
-
-    item(
-        "aura",
-        "Aura",
-        125000000,
-        {
-            category: "property",
-            unlockLevel: 9,
-            sourcePage: 50
-        }
-    ),
-
-    item(
-        "scotia_plaza",
-        "Scotia Plaza",
-        700000000,
-        {
-            category: "property",
-            unlockLevel: 9,
-            sourcePage: 50
-        }
-    ),
-
-    item(
-        "roppongi_hills_mori_tower",
-        "Roppongi Hills Mori Tower",
-        1200000000,
-        {
-            category: "property",
-            unlockLevel: 9,
-            sourcePage: 51
-        }
-    ),
-
-    item(
-        "the_palazzo",
-        "The Palazzo",
-        15000000,
-        {
-            category: "property",
-            unlockLevel: 10,
-            sourcePage: 52
-        }
-    ),
-
-    item(
-        "albertas_industrial_heartland",
-        "Alberta's Industrial Heartland",
-        25000000,
-        {
-            category: "property",
-            unlockLevel: 10,
-            sourcePage: 52
-        }
-    ),
-
-    item(
-        "marina_101",
-        "Marina 101",
-        50000000,
-        {
-            category: "property",
-            unlockLevel: 11,
-            sourcePage: 53
-        }
-    ),
-
-    item(
-        "burj_khalifa",
-        "Burj Khalifa",
-        2000000000,
-        {
-            category: "property",
-            unlockLevel: 11,
-            sourcePage: 53
-        }
-    ),
-
-    item(
-        "dubai_industrial_city",
-        "Dubai Industrial City",
-        900000000000,
-        {
-            category: "property",
-            unlockLevel: 13,
-            sourcePage: 54
-        }
-    ),
-
-    item(
-        "bataan_nuclear_power_plant",
-        "Bataan Nuclear Power Plant",
-        5000000000000,
-        {
-            category: "property",
-            unlockLevel: 13,
-            sourcePage: 54
-        }
-    ),
-
-    item(
-        "industrial_level_14",
-        "Industrial Property",
-        5000000000000,
-        {
-            category: "property",
-            unlockLevel: 14,
-            sourcePage: 55
-        }
-    ),
-
-    item(
-        "dubailand",
-        "Dubailand",
-        10000000000000,
-        {
-            category: "property",
-            unlockLevel: 15,
-            sourcePage: 55
-        }
-    )
+    { id: 'office', name: 'Office', price: 100000, income: 5000, level: 2 },
+    { id: 'warehouse', name: 'Warehouse', price: 500000, income: 18000, level: 4 },
+    { id: 'headquarters', name: 'Headquarters', price: 5000000, income: 150000, level: 7 },
+    { id: 'corporate_tower', name: 'Corporate Tower', price: 25000000, income: 1000000, level: 11 },
+    { id: 'business_district', name: 'Business District', price: 100000000, income: 5000000, level: 15 }
 ];
 
-/* =========================================================
-   STOCK MARKET
-========================================================= */
-
-const STOCK_MARKET = [
-    item(
-        "wheat",
-        "Wheat",
-        55000,
-        {
-            category: "stock",
-            requirement:
-                "MAX TRADE: $55,000; LOW RISK",
-            sourcePage: 23
-        }
-    ),
-
-    item(
-        "corn",
-        "Corn",
-        null,
-        {
-            category: "stock",
-            requirement:
-                "REQUIRE BROKERAGE LEVEL 2; MEDIUM RISK",
-            sourcePage: 23
-        }
-    ),
-
-    item(
-        "cotton",
-        "Cotton",
-        null,
-        {
-            category: "stock",
-            requirement:
-                "REQUIRE BROKERAGE LEVEL 3; HIGH RISK",
-            sourcePage: 23
-        }
-    ),
-
-    item(
-        "natural_gas",
-        "Natural Gas",
-        null,
-        {
-            category: "stock",
-            requirement:
-                "REQUIRE BROKERAGE LEVEL 4; VERY HIGH RISK",
-            sourcePage: 23
-        }
-    ),
-
-    item(
-        "brent_crude_oil",
-        "Brent Crude Oil",
-        null,
-        {
-            category: "stock",
-            requirement:
-                "REQUIRE BROKERAGE COMPANY LEVEL 6; CRAZY RISK",
-            sourcePage: 23
-        }
-    )
+const RESOURCES = [
+    { id: 'coal', name: 'Coal', price: 100000, income: 8000, level: 3 },
+    { id: 'iron', name: 'Iron', price: 250000, income: 20000, level: 4 },
+    { id: 'oil', name: 'Oil', price: 1000000, income: 90000, level: 6 },
+    { id: 'gas', name: 'Natural Gas', price: 2000000, income: 175000, level: 7 },
+    { id: 'gold', name: 'Gold', price: 5000000, income: 500000, level: 9 },
+    { id: 'lithium', name: 'Lithium', price: 15000000, income: 1500000, level: 11 }
 ];
 
-/* =========================================================
-   MEGA PROJECTS
-========================================================= */
+const ALL_CATALOGS = {
+    transportation: TRANSPORTS,
+    businesses: BUSINESSES,
+    concessions: CONCESSIONS,
+    subsidiaries: SUBSIDIARIES,
+    investments: INVESTMENTS,
+    properties: PROPERTIES,
+    resources: RESOURCES
+};
 
-const MEGA_PROJECTS = [
-    item(
-        "geothermal_power_plant",
-        "Geothermal Power Plant",
-        null,
-        {
-            category: "mega_project",
-            requirement:
-                "Require production tech level 30",
-            sourcePage: 35
-        }
-    ),
-
-    item(
-        "satellite_spaceship",
-        "Satellite Spaceship",
-        null,
-        {
-            category: "mega_project",
-            requirement:
-                "Require production tech level 32",
-            sourcePage: 35
-        }
-    ),
-
-    item(
-        "nuclear_submarine",
-        "Nuclear Submarine",
-        null,
-        {
-            category: "mega_project",
-            requirement:
-                "Require company level 8",
-            sourcePage: 36
-        }
-    ),
-
-    item(
-        "nuclear_power_plant",
-        "Nuclear power plant",
-        null,
-        {
-            category: "mega_project",
-            requirement:
-                "Require production tech level 32",
-            sourcePage: 37
-        }
-    ),
-
-    item(
-        "space_travelling_shuttle_project",
-        "Space Travelling Shuttle",
-        null,
-        {
-            category: "mega_project",
-            requirement:
-                "Require company level 9",
-            sourcePage: 37
-        }
-    ),
-
-    item(
-        "space_elevator",
-        "Space Elevator",
-        null,
-        {
-            category: "mega_project",
-            requirement:
-                "Require company level 10",
-            sourcePage: 38
-        }
-    )
+const CHALLENGES = [
+    {
+        id: 'first_million',
+        name: 'First Million',
+        description: 'Reach $1,000,000 net worth.',
+        requirement: 1000000,
+        reward: 100000
+    },
+    {
+        id: 'ten_million',
+        name: 'Ten Million',
+        description: 'Reach $10,000,000 net worth.',
+        requirement: 10000000,
+        reward: 1000000
+    },
+    {
+        id: 'hundred_million',
+        name: 'Hundred Million',
+        description: 'Reach $100,000,000 net worth.',
+        requirement: 100000000,
+        reward: 10000000
+    },
+    {
+        id: 'asset_empire',
+        name: 'Asset Empire',
+        description: 'Own at least 100 assets.',
+        requirement: 100,
+        reward: 25000000
+    }
 ];
 
-/* =========================================================
-   COMPLETE CATALOG
-========================================================= */
-
-const CATALOG = [
-    ...BUSINESSES,
-    ...TRANSPORTATION,
-    ...CONCESSIONS,
-    ...RESOURCES,
-    ...SUBSIDIARIES,
-    ...RESEARCH,
-    ...PRODUCTION_TECH,
-    ...PRODUCTS,
-    ...PROPERTIES,
-    ...STOCK_MARKET,
-    ...MEGA_PROJECTS
+const CEO_UPGRADES = [
+    { id: 'leadership', name: 'Leadership', baseCost: 100000, max: 10 },
+    { id: 'negotiation', name: 'Negotiation', baseCost: 150000, max: 10 },
+    { id: 'management', name: 'Management', baseCost: 200000, max: 10 },
+    { id: 'strategy', name: 'Strategy', baseCost: 300000, max: 10 },
+    { id: 'innovation', name: 'Innovation', baseCost: 500000, max: 10 }
 ];
 
-function catalogById(id) {
-    return CATALOG.find(
-        x => x.id === String(id)
-    ) || null;
-}
+const SPECIAL_ITEMS = [
+    {
+        id: 'golden_ceo_badge',
+        name: 'Golden CEO Badge',
+        price: 5000000,
+        effect: 'income',
+        value: 0.05
+    },
+    {
+        id: 'executive_license',
+        name: 'Executive License',
+        price: 10000000,
+        effect: 'contract',
+        value: 0.10
+    },
+    {
+        id: 'military_medal',
+        name: 'Military Medal',
+        price: 7500000,
+        effect: 'army',
+        value: 0.10
+    },
+    {
+        id: 'innovation_chip',
+        name: 'Innovation Chip',
+        price: 15000000,
+        effect: 'production',
+        value: 0.15
+    }
+];
 
-function catalogCategory(category) {
-    const c = normalize(category);
+const STOCKS = [
+    { symbol: 'GTC', name: 'Global Tech Corporation', price: 100 },
+    { symbol: 'WEN', name: 'World Energy', price: 250 },
+    { symbol: 'MLG', name: 'Mega Logistics', price: 175 },
+    { symbol: 'GFD', name: 'Global Food', price: 90 },
+    { symbol: 'FMT', name: 'Future Motors', price: 320 }
+];
 
-    return CATALOG.filter(
-        x => normalize(x.category) === c
-    );
-}
+const SPACE_LEVELS = [
+    { level: 1, name: 'Space Research', cost: 10000000 },
+    { level: 2, name: 'Satellite Program', cost: 50000000 },
+    { level: 3, name: 'Launch Program', cost: 250000000 },
+    { level: 4, name: 'Orbital Network', cost: 1000000000 },
+    { level: 5, name: 'Deep Space Program', cost: 5000000000 }
+];
 
 /* =========================================================
    DATABASE INITIALIZATION
 ========================================================= */
 
+async function columnExists(table, column) {
+    const result = await query(
+        `
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = $1
+              AND column_name = $2
+        ) AS exists
+        `,
+        [table, column]
+    );
+
+    return result.rows[0].exists;
+}
+
+async function ensureColumn(table, column, definition) {
+    if (!(await columnExists(table, column))) {
+        await query(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${definition}`);
+    }
+}
+
 async function initDatabase() {
+    console.log('Initializing PostgreSQL database...');
 
     await query(`
         CREATE TABLE IF NOT EXISTS players (
-            id BIGSERIAL PRIMARY KEY,
+            id TEXT PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE,
             password_hash TEXT NOT NULL,
-            company_name TEXT NOT NULL,
-            country TEXT NOT NULL DEFAULT 'India',
-
-            cash NUMERIC(30,2) NOT NULL DEFAULT 10000,
-            gold_coins INTEGER NOT NULL DEFAULT 0,
-
+            company_name TEXT NOT NULL DEFAULT 'New Company',
+            country_id TEXT NOT NULL DEFAULT 'india',
+            cash BIGINT NOT NULL DEFAULT 100000,
             level INTEGER NOT NULL DEFAULT 1,
             xp BIGINT NOT NULL DEFAULT 0,
-
-            production_tech INTEGER NOT NULL DEFAULT 0,
-
-            net_worth NUMERIC(30,2) NOT NULL DEFAULT 10000,
-
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            total_income BIGINT NOT NULL DEFAULT 0,
+            total_expenses BIGINT NOT NULL DEFAULT 0,
             last_income_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     `);
+
+    await ensureColumn('players', 'email', 'TEXT');
+    await ensureColumn('players', 'company_name', `TEXT NOT NULL DEFAULT 'New Company'`);
+    await ensureColumn('players', 'country_id', `TEXT NOT NULL DEFAULT 'india'`);
+    await ensureColumn('players', 'cash', `BIGINT NOT NULL DEFAULT 100000`);
+    await ensureColumn('players', 'level', `INTEGER NOT NULL DEFAULT 1`);
+    await ensureColumn('players', 'xp', `BIGINT NOT NULL DEFAULT 0`);
+    await ensureColumn('players', 'total_income', `BIGINT NOT NULL DEFAULT 0`);
+    await ensureColumn('players', 'total_expenses', `BIGINT NOT NULL DEFAULT 0`);
+    await ensureColumn('players', 'last_income_at', `TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+    await ensureColumn('players', 'created_at', `TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
 
     await query(`
         CREATE TABLE IF NOT EXISTS sessions (
             token TEXT PRIMARY KEY,
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            expires_at TIMESTAMPTZ
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS player_assets (
-            id BIGSERIAL PRIMARY KEY,
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            item_id TEXT NOT NULL,
+            id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             category TEXT NOT NULL,
-
-            quantity BIGINT NOT NULL DEFAULT 0,
-
+            asset_id TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-            UNIQUE(player_id, item_id, category)
+            UNIQUE(player_id, category, asset_id)
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS player_concessions (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            concession_id TEXT NOT NULL,
-
-            purchased_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-            PRIMARY KEY(player_id, concession_id)
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS research (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            research_id TEXT NOT NULL,
-
-            level INTEGER NOT NULL DEFAULT 1,
-
-            purchased_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-            PRIMARY KEY(player_id, research_id)
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS loans (
-            id BIGSERIAL PRIMARY KEY,
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            amount NUMERIC(30,2) NOT NULL,
-            remaining NUMERIC(30,2) NOT NULL,
-
-            interest NUMERIC(12,4) NOT NULL DEFAULT 0.05,
-
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        CREATE TABLE IF NOT EXISTS world_sites (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            country_id TEXT NOT NULL,
+            resource_type TEXT,
+            value BIGINT NOT NULL DEFAULT 100000,
+            income BIGINT NOT NULL DEFAULT 10000,
+            owner_id TEXT REFERENCES players(id) ON DELETE SET NULL
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS contracts (
-            id BIGSERIAL PRIMARY KEY,
-
+            id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             description TEXT,
-
-            category TEXT NOT NULL DEFAULT 'business',
-
-            quantity INTEGER NOT NULL DEFAULT 1,
-            market_value NUMERIC(30,2) NOT NULL DEFAULT 0,
-
-            min_bid NUMERIC(30,2) NOT NULL DEFAULT 0,
-
-            winners INTEGER NOT NULL DEFAULT 1,
-
-            ends_at TIMESTAMPTZ NOT NULL,
-
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            reward BIGINT NOT NULL DEFAULT 10000,
+            min_level INTEGER NOT NULL DEFAULT 1,
+            duration_hours INTEGER NOT NULL DEFAULT 24,
+            starts_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ends_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'open'
         )
     `);
 
+    /*
+     * IMPORTANT:
+     * This is the fix for the Render error.
+     * If the old contracts table exists without ends_at,
+     * this migration creates the missing column BEFORE
+     * seedContracts() is executed.
+     */
+    await ensureColumn('contracts', 'title', `TEXT NOT NULL DEFAULT 'Contract'`);
+    await ensureColumn('contracts', 'description', `TEXT`);
+    await ensureColumn('contracts', 'reward', `BIGINT NOT NULL DEFAULT 10000`);
+    await ensureColumn('contracts', 'min_level', `INTEGER NOT NULL DEFAULT 1`);
+    await ensureColumn('contracts', 'duration_hours', `INTEGER NOT NULL DEFAULT 24`);
+    await ensureColumn('contracts', 'starts_at', `TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+    await ensureColumn('contracts', 'ends_at', `TIMESTAMPTZ`);
+    await ensureColumn('contracts', 'status', `TEXT NOT NULL DEFAULT 'open'`);
+
     await query(`
         CREATE TABLE IF NOT EXISTS contract_bids (
-            id BIGSERIAL PRIMARY KEY,
-
-            contract_id BIGINT NOT NULL REFERENCES contracts(id)
-                ON DELETE CASCADE,
-
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            bid NUMERIC(30,2) NOT NULL,
-
+            id TEXT PRIMARY KEY,
+            contract_id TEXT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            amount BIGINT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
             UNIQUE(contract_id, player_id)
         )
     `);
 
     await query(`
+        CREATE TABLE IF NOT EXISTS running_contracts (
+            id TEXT PRIMARY KEY,
+            contract_id TEXT NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            reward BIGINT NOT NULL,
+            started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ends_at TIMESTAMPTZ NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running'
+        )
+    `);
+
+    await query(`
         CREATE TABLE IF NOT EXISTS alliances (
-            id BIGSERIAL PRIMARY KEY,
-
-            name TEXT NOT NULL,
-            country TEXT NOT NULL,
-
-            leader_id BIGINT REFERENCES players(id)
-                ON DELETE SET NULL,
-
+            id TEXT PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            leader_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS alliance_members (
-            alliance_id BIGINT NOT NULL REFERENCES alliances(id)
-                ON DELETE CASCADE,
-
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
+            alliance_id TEXT NOT NULL REFERENCES alliances(id) ON DELETE CASCADE,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            role TEXT NOT NULL DEFAULT 'member',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             PRIMARY KEY(alliance_id, player_id)
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS chat (
-            id BIGSERIAL PRIMARY KEY,
-
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            channel TEXT NOT NULL DEFAULT 'global',
-
+            id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             message TEXT NOT NULL,
-
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS world_sites (
-            id BIGSERIAL PRIMARY KEY,
-
-            name TEXT NOT NULL,
-            country TEXT NOT NULL,
-
-            latitude DOUBLE PRECISION,
-            longitude DOUBLE PRECISION,
-
-            resource TEXT,
-
-            owner_id BIGINT REFERENCES players(id)
-                ON DELETE SET NULL
+        CREATE TABLE IF NOT EXISTS loans (
+            id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            principal BIGINT NOT NULL,
+            remaining BIGINT NOT NULL,
+            interest_rate NUMERIC NOT NULL DEFAULT 0.10,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            due_at TIMESTAMPTZ
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS armies (
-            player_id BIGINT PRIMARY KEY REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            ground INTEGER NOT NULL DEFAULT 1,
-            air INTEGER NOT NULL DEFAULT 0,
-            defense INTEGER NOT NULL DEFAULT 1,
-            offensive INTEGER NOT NULL DEFAULT 1,
-
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        CREATE TABLE IF NOT EXISTS army (
+            player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+            ground_level INTEGER NOT NULL DEFAULT 1,
+            air_level INTEGER NOT NULL DEFAULT 1,
+            defense_level INTEGER NOT NULL DEFAULT 1,
+            offensive_level INTEGER NOT NULL DEFAULT 1
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS wars (
-            id BIGSERIAL PRIMARY KEY,
-
-            attacker_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            defender_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            attacker_power BIGINT NOT NULL DEFAULT 0,
-            defender_power BIGINT NOT NULL DEFAULT 0,
-
-            status TEXT NOT NULL DEFAULT 'active',
-
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            resolved_at TIMESTAMPTZ
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS country_relations (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            country TEXT NOT NULL,
-
-            relation INTEGER NOT NULL DEFAULT 50,
-
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-            PRIMARY KEY(player_id, country)
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS marketing_campaigns (
-            id BIGSERIAL PRIMARY KEY,
-
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            campaign_type TEXT NOT NULL,
-
-            cost NUMERIC(30,2) NOT NULL,
-            duration_hours INTEGER NOT NULL DEFAULT 1,
-
-            multiplier NUMERIC(12,4) NOT NULL DEFAULT 1,
-
-            starts_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            ends_at TIMESTAMPTZ NOT NULL,
-
+            id TEXT PRIMARY KEY,
+            attacker_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            defender_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            attacker_power BIGINT NOT NULL,
+            defender_power BIGINT NOT NULL,
+            result TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS challenge_claims (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS research (
+            player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+            research_points BIGINT NOT NULL DEFAULT 0,
+            technology_level INTEGER NOT NULL DEFAULT 1
+        )
+    `);
 
+    await query(`
+        CREATE TABLE IF NOT EXISTS missions (
+            id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            description TEXT,
+            reward BIGINT NOT NULL DEFAULT 10000,
+            progress INTEGER NOT NULL DEFAULT 0,
+            target INTEGER NOT NULL DEFAULT 1,
+            claimed BOOLEAN NOT NULL DEFAULT FALSE
+        )
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS mega_projects (
+            id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            level INTEGER NOT NULL DEFAULT 1,
+            invested BIGINT NOT NULL DEFAULT 0,
+            target BIGINT NOT NULL DEFAULT 10000000,
+            completed BOOLEAN NOT NULL DEFAULT FALSE
+        )
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS country_relations (
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            country_id TEXT NOT NULL,
+            relation INTEGER NOT NULL DEFAULT 0,
+            trade_bonus NUMERIC NOT NULL DEFAULT 0,
+            PRIMARY KEY(player_id, country_id)
+        )
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS media_campaigns (
+            id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            cost BIGINT NOT NULL,
+            bonus NUMERIC NOT NULL,
+            ends_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    `);
+
+    await query(`
+        CREATE TABLE IF NOT EXISTS business_challenges (
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             challenge_id TEXT NOT NULL,
-
-            claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
+            progress BIGINT NOT NULL DEFAULT 0,
+            completed BOOLEAN NOT NULL DEFAULT FALSE,
+            claimed BOOLEAN NOT NULL DEFAULT FALSE,
             PRIMARY KEY(player_id, challenge_id)
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS ceo_upgrades (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             upgrade_id TEXT NOT NULL,
-
             level INTEGER NOT NULL DEFAULT 0,
-
             PRIMARY KEY(player_id, upgrade_id)
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS collection_claims (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
+        CREATE TABLE IF NOT EXISTS collections (
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             collection_id TEXT NOT NULL,
-
-            claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
+            claimed BOOLEAN NOT NULL DEFAULT FALSE,
             PRIMARY KEY(player_id, collection_id)
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS special_items (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            price INTEGER NOT NULL DEFAULT 0
-        )
-    `);
-
-    await query(`
-        CREATE TABLE IF NOT EXISTS player_special_items (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            item_id TEXT NOT NULL REFERENCES special_items(id)
-                ON DELETE CASCADE,
-
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            item_id TEXT NOT NULL,
             quantity INTEGER NOT NULL DEFAULT 0,
-
             PRIMARY KEY(player_id, item_id)
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS stock_positions (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            stock_id TEXT NOT NULL,
-
-            quantity BIGINT NOT NULL DEFAULT 0,
-
-            average_price NUMERIC(30,2) NOT NULL DEFAULT 0,
-
-            PRIMARY KEY(player_id, stock_id)
+        CREATE TABLE IF NOT EXISTS stocks (
+            symbol TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            price NUMERIC NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS stock_prices (
-            stock_id TEXT PRIMARY KEY,
-
-            price NUMERIC(30,2) NOT NULL,
-
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        CREATE TABLE IF NOT EXISTS player_stocks (
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            symbol TEXT NOT NULL REFERENCES stocks(symbol) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL DEFAULT 0,
+            average_price NUMERIC NOT NULL DEFAULT 0,
+            PRIMARY KEY(player_id, symbol)
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS production_orders (
-            id BIGSERIAL PRIMARY KEY,
-
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            product_id TEXT NOT NULL,
-
-            quantity BIGINT NOT NULL,
-
-            cost NUMERIC(30,2) NOT NULL,
-
+            id TEXT PRIMARY KEY,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            product TEXT NOT NULL,
+            quantity INTEGER NOT NULL,
+            cost BIGINT NOT NULL,
+            reward BIGINT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-            completes_at TIMESTAMPTZ NOT NULL,
-
-            completed BOOLEAN NOT NULL DEFAULT FALSE
+            ends_at TIMESTAMPTZ NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running'
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS space_program (
-            player_id BIGINT PRIMARY KEY REFERENCES players(id)
-                ON DELETE CASCADE,
-
+            player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
             level INTEGER NOT NULL DEFAULT 0,
-
-            missions_completed INTEGER NOT NULL DEFAULT 0,
-
+            research BIGINT NOT NULL DEFAULT 0,
             satellites INTEGER NOT NULL DEFAULT 0,
-
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            launches INTEGER NOT NULL DEFAULT 0
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS congress_resolutions (
-            id BIGSERIAL PRIMARY KEY,
-
-            creator_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
+            id TEXT PRIMARY KEY,
+            creator_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             title TEXT NOT NULL,
-
             description TEXT,
-
             yes_votes INTEGER NOT NULL DEFAULT 0,
             no_votes INTEGER NOT NULL DEFAULT 0,
-
             active BOOLEAN NOT NULL DEFAULT TRUE,
-
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     `);
 
     await query(`
         CREATE TABLE IF NOT EXISTS congress_votes (
-            resolution_id BIGINT NOT NULL
-                REFERENCES congress_resolutions(id)
-                ON DELETE CASCADE,
-
-            player_id BIGINT NOT NULL
-                REFERENCES players(id)
-                ON DELETE CASCADE,
-
+            resolution_id TEXT NOT NULL REFERENCES congress_resolutions(id) ON DELETE CASCADE,
+            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
             vote BOOLEAN NOT NULL,
-
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
             PRIMARY KEY(resolution_id, player_id)
         )
     `);
 
     await query(`
-        CREATE TABLE IF NOT EXISTS missions (
-            player_id BIGINT NOT NULL REFERENCES players(id)
-                ON DELETE CASCADE,
-
-            mission_id TEXT NOT NULL,
-
-            progress INTEGER NOT NULL DEFAULT 0,
-
-            target INTEGER NOT NULL DEFAULT 1,
-
-            claimed BOOLEAN NOT NULL DEFAULT FALSE,
-
-            PRIMARY KEY(player_id, mission_id)
+        CREATE TABLE IF NOT EXISTS marketing_stats (
+            player_id TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+            brand_level INTEGER NOT NULL DEFAULT 1,
+            reputation INTEGER NOT NULL DEFAULT 0,
+            campaigns INTEGER NOT NULL DEFAULT 0
         )
     `);
 
     await seedWorldSites();
-    await seedSpecialItems();
-    await seedStockPrices();
     await seedContracts();
+    await seedStocks();
+
+    console.log('Database initialized successfully.');
 }
 
 /* =========================================================
-   SEED WORLD SITES
+   SEED DATA
 ========================================================= */
 
 async function seedWorldSites() {
+    const count = await query(`SELECT COUNT(*)::int AS count FROM world_sites`);
 
-    const result =
-        await query(
-            `SELECT COUNT(*)::int AS count
-             FROM world_sites`
-        );
-
-    if (result.rows[0].count > 0) {
-        return;
-    }
+    if (count.rows[0].count > 0) return;
 
     const sites = [
-        ["North America Resource Site", "United States", 39.0, -98.0, "Oil"],
-        ["Canada Mining Site", "Canada", 56.0, -106.0, "Iron"],
-        ["Brazil Resource Site", "Brazil", -10.0, -55.0, "Gold"],
-        ["Chile Mining Site", "Chile", -30.0, -71.0, "Copper"],
-        ["India Resource Site", "India", 22.0, 79.0, "Aluminum"],
-        ["Australia Mining Site", "Australia", -25.0, 133.0, "Iron"],
-        ["Middle East Oil Site", "Saudi Arabia", 24.0, 45.0, "Oil"],
-        ["South Africa Resource Site", "South Africa", -30.0, 25.0, "Gold"]
+        ['site_india_oil', 'Indian Oil Field', 'india', 'oil', 1000000, 90000],
+        ['site_india_iron', 'Indian Iron Mine', 'india', 'iron', 500000, 25000],
+        ['site_usa_oil', 'Texas Oil Field', 'usa', 'oil', 5000000, 300000],
+        ['site_canada_gold', 'Canadian Gold Mine', 'canada', 'gold', 7500000, 550000],
+        ['site_australia_iron', 'Australian Iron Mine', 'australia', 'iron', 2500000, 120000],
+        ['site_brazil_oil', 'Brazilian Oil Field', 'brazil', 'oil', 4000000, 250000],
+        ['site_germany_coal', 'German Coal Mine', 'germany', 'coal', 1000000, 50000],
+        ['site_china_lithium', 'Chinese Lithium Mine', 'china', 'lithium', 15000000, 1200000],
+        ['site_japan_rare', 'Japanese Technology Site', 'japan', 'gold', 12000000, 900000],
+        ['site_uk_gas', 'British Gas Field', 'uk', 'gas', 8000000, 650000]
     ];
 
-    for (const site of sites) {
+    for (const s of sites) {
         await query(
-            `INSERT INTO world_sites
-             (name, country, latitude, longitude, resource)
-             VALUES ($1,$2,$3,$4,$5)`,
-            site
+            `
+            INSERT INTO world_sites
+            (id,name,country_id,resource_type,value,income)
+            VALUES ($1,$2,$3,$4,$5,$6)
+            ON CONFLICT (id) DO NOTHING
+            `,
+            s
         );
     }
 }
-
-/* =========================================================
-   SPECIAL ITEMS
-========================================================= */
-
-async function seedSpecialItems() {
-
-    const items = [
-        ["golden_ceo_badge", "Golden CEO Badge", 10],
-        ["executive_license", "Executive License", 15],
-        ["military_medal", "Military Medal", 20],
-        ["innovation_chip", "Innovation Chip", 25]
-    ];
-
-    for (const itemData of items) {
-        await query(
-            `INSERT INTO special_items
-             (id, name, price)
-             VALUES ($1,$2,$3)
-             ON CONFLICT(id) DO NOTHING`,
-            itemData
-        );
-    }
-}
-
-/* =========================================================
-   STOCK PRICES
-========================================================= */
-
-async function seedStockPrices() {
-
-    for (const stock of STOCK_MARKET) {
-
-        if (stock.price == null) {
-            continue;
-        }
-
-        await query(
-            `INSERT INTO stock_prices
-             (stock_id, price)
-             VALUES ($1,$2)
-             ON CONFLICT(stock_id) DO NOTHING`,
-            [
-                stock.id,
-                stock.price
-            ]
-        );
-    }
-}
-
-/* =========================================================
-   CONTRACT SEED
-========================================================= */
 
 async function seedContracts() {
+    /*
+     * The previous crash happened here because ends_at was
+     * queried before the migration had created it.
+     *
+     * initDatabase() now guarantees that ends_at exists.
+     */
 
-    const result =
-        await query(
-            `SELECT COUNT(*)::int AS count
-             FROM contracts
-             WHERE ends_at > NOW()`
-        );
+    const count = await query(`SELECT COUNT(*)::int AS count FROM contracts`);
 
-    if (result.rows[0].count > 0) {
-        return;
-    }
+    if (count.rows[0].count > 0) return;
 
     const contracts = [
-        [
-            "Natural Resources Contract",
-            "Supply raw resources.",
-            "resources",
-            100,
-            30000,
-            15000,
-            2,
-            60
-        ],
-        [
-            "Transportation Contract",
-            "Provide transportation capacity.",
-            "transportation",
-            50,
-            48000,
-            20000,
-            1,
-            90
-        ],
-        [
-            "Commerce Contract",
-            "Commercial supply agreement.",
-            "business",
-            100,
-            60000,
-            25000,
-            2,
-            120
-        ]
+        ['contract_food', 'Food Supply Contract', 'Supply food products to a regional chain.', 25000, 1, 12],
+        ['contract_transport', 'Transport Contract', 'Provide transportation services.', 100000, 2, 24],
+        ['contract_factory', 'Factory Contract', 'Complete a large manufacturing order.', 500000, 5, 48],
+        ['contract_global', 'Global Logistics Contract', 'Complete an international logistics contract.', 2500000, 8, 72],
+        ['contract_corporate', 'Corporate Expansion Contract', 'Support a major corporate expansion.', 10000000, 12, 96]
     ];
 
     for (const c of contracts) {
-
         await query(
-            `INSERT INTO contracts
-             (
-                title,
-                description,
-                category,
-                quantity,
-                market_value,
-                min_bid,
-                winners,
-                ends_at
-             )
-             VALUES
-             ($1,$2,$3,$4,$5,$6,$7,NOW()+($8 || ' minutes')::interval)`,
+            `
+            INSERT INTO contracts
+            (id,title,description,reward,min_level,duration_hours,starts_at,ends_at,status)
+            VALUES
+            ($1,$2,$3,$4,$5,$6,NOW(),NOW() + ($6 * INTERVAL '1 hour'),'open')
+            ON CONFLICT (id) DO NOTHING
+            `,
             c
         );
     }
 }
 
-/* =========================================================
-   AUTHENTICATION
-========================================================= */
-
-async function authenticate(req) {
-
-    const token = bearerToken(req);
-
-    if (!token) {
-        return null;
-    }
-
-    const result =
+async function seedStocks() {
+    for (const s of STOCKS) {
         await query(
-            `SELECT
-                p.*,
-                s.token
-             FROM sessions s
-             JOIN players p
-               ON p.id = s.player_id
-             WHERE s.token = $1`,
-            [token]
+            `
+            INSERT INTO stocks(symbol,name,price)
+            VALUES($1,$2,$3)
+            ON CONFLICT(symbol)
+            DO UPDATE SET name=EXCLUDED.name
+            `,
+            [s.symbol, s.name, s.price]
         );
-
-    if (!result.rows.length) {
-        return null;
     }
-
-    await query(
-        `UPDATE sessions
-         SET last_used_at = NOW()
-         WHERE token = $1`,
-        [token]
-    );
-
-    return result.rows[0];
-}
-
-async function requirePlayer(req, res) {
-
-    const player =
-        await authenticate(req);
-
-    if (!player) {
-        error(
-            res,
-            401,
-            "Authentication required"
-        );
-
-        return null;
-    }
-
-    return player;
 }
 
 /* =========================================================
-   LEVEL SYSTEM
+   PLAYER / ECONOMY
 ========================================================= */
 
-const LEVELS = [
-    {
-        level: 1,
-        xp: 0,
-        title: "Beginner Businessman"
-    },
-    {
-        level: 2,
-        xp: 100,
-        title: "Small Businessman"
-    },
-    {
-        level: 3,
-        xp: 300,
-        title: "Businessman"
-    },
-    {
-        level: 4,
-        xp: 700,
-        title: "Experienced Businessman"
-    },
-    {
-        level: 5,
-        xp: 1500,
-        title: "Established Businessman"
-    },
-    {
-        level: 6,
-        xp: 3000,
-        title: "Professional Businessman"
-    },
-    {
-        level: 7,
-        xp: 6000,
-        title: "Executive"
-    },
-    {
-        level: 8,
-        xp: 12000,
-        title: "Senior Executive"
-    },
-    {
-        level: 9,
-        xp: 25000,
-        title: "CEO"
-    },
-    {
-        level: 10,
-        xp: 50000,
-        title: "Corporate CEO"
-    },
-    {
-        level: 11,
-        xp: 100000,
-        title: "Business Tycoon"
-    },
-    {
-        level: 12,
-        xp: 200000,
-        title: "Major Tycoon"
-    },
-    {
-        level: 13,
-        xp: 400000,
-        title: "Industrial Tycoon"
-    },
-    {
-        level: 14,
-        xp: 800000,
-        title: "Global Tycoon"
-    },
-    {
-        level: 15,
-        xp: 1500000,
-        title: "Business Empire"
-    }
-];
+function xpForLevel(level) {
+    return Math.round(1000 * Math.pow(level, 1.65));
+}
 
-function levelForXP(xp) {
+function calculateLevel(xp) {
+    let level = 1;
 
-    let selected =
-        LEVELS[0];
-
-    for (const level of LEVELS) {
-
-        if (Number(xp) >= level.xp) {
-            selected = level;
+    for (let i = 2; i <= 15; i++) {
+        if (xp >= xpForLevel(i)) {
+            level = i;
         }
     }
 
-    return selected;
+    return level;
+}
+
+async function processIncome(playerId) {
+    const playerResult = await query(
+        `SELECT * FROM players WHERE id=$1`,
+        [playerId]
+    );
+
+    if (!playerResult.rows.length) return null;
+
+    const player = playerResult.rows[0];
+
+    const assetResult = await query(
+        `
+        SELECT category, asset_id, quantity
+        FROM player_assets
+        WHERE player_id=$1 AND quantity>0
+        `,
+        [playerId]
+    );
+
+    let incomePerCycle = 0;
+
+    for (const asset of assetResult.rows) {
+        const catalog = ALL_CATALOGS[asset.category] || [];
+        const item = catalog.find(x => x.id === asset.asset_id);
+
+        if (item) {
+            incomePerCycle += num(item.income) * num(asset.quantity);
+        }
+    }
+
+    const siteResult = await query(
+        `
+        SELECT COALESCE(SUM(income),0) AS income
+        FROM world_sites
+        WHERE owner_id=$1
+        `,
+        [playerId]
+    );
+
+    incomePerCycle += num(siteResult.rows[0].income);
+
+    const specialResult = await query(
+        `
+        SELECT COALESCE(SUM(
+            CASE
+                WHEN si.effect='income' THEN si.value * psi.quantity
+                ELSE 0
+            END
+        ),0) AS bonus
+        FROM player_special_items psi
+        JOIN special_items_catalog si ON si.id=psi.item_id
+        WHERE psi.player_id=$1
+        `,
+        [playerId]
+    ).catch(() => ({ rows: [{ bonus: 0 }] }));
+
+    const bonus = num(specialResult.rows[0]?.bonus);
+
+    incomePerCycle = Math.round(incomePerCycle * (1 + bonus));
+
+    const last = new Date(player.last_income_at || Date.now());
+    const elapsed = Math.floor((Date.now() - last.getTime()) / 60000);
+
+    /*
+     * One income cycle every 60 minutes.
+     * Maximum 24 offline cycles.
+     */
+    const cycles = clamp(Math.floor(elapsed / 60), 0, 24);
+
+    if (cycles <= 0) {
+        return {
+            incomePerCycle,
+            cycles: 0,
+            received: 0,
+            player
+        };
+    }
+
+    const received = incomePerCycle * cycles;
+
+    const newLast = new Date(
+        last.getTime() + cycles * 60 * 60 * 1000
+    );
+
+    await query(
+        `
+        UPDATE players
+        SET cash=cash+$1,
+            total_income=total_income+$1,
+            xp=xp+$2,
+            last_income_at=$3
+        WHERE id=$4
+        `,
+        [received, Math.max(1, Math.floor(received / 1000)), newLast, playerId]
+    );
+
+    await updateLevel(playerId);
+
+    return {
+        incomePerCycle,
+        cycles,
+        received,
+        player
+    };
 }
 
 async function updateLevel(playerId) {
+    const result = await query(
+        `SELECT xp,level FROM players WHERE id=$1`,
+        [playerId]
+    );
 
-    const result =
+    if (!result.rows.length) return;
+
+    const xp = num(result.rows[0].xp);
+    const level = calculateLevel(xp);
+
+    if (level !== num(result.rows[0].level)) {
         await query(
-            `SELECT id, xp, level
-             FROM players
-             WHERE id = $1`,
-            [playerId]
-        );
-
-    if (!result.rows.length) {
-        return;
-    }
-
-    const player =
-        result.rows[0];
-
-    const calculated =
-        levelForXP(player.xp);
-
-    if (
-        Number(player.level) !==
-        Number(calculated.level)
-    ) {
-
-        await query(
-            `UPDATE players
-             SET level = $1,
-                 updated_at = NOW()
-             WHERE id = $2`,
-            [
-                calculated.level,
-                playerId
-            ]
+            `UPDATE players SET level=$1 WHERE id=$2`,
+            [level, playerId]
         );
     }
 }
 
+async function playerNetWorth(playerId) {
+    const playerResult = await query(
+        `SELECT cash FROM players WHERE id=$1`,
+        [playerId]
+    );
+
+    if (!playerResult.rows.length) return 0;
+
+    let value = num(playerResult.rows[0].cash);
+
+    const assets = await query(
+        `
+        SELECT category,asset_id,quantity
+        FROM player_assets
+        WHERE player_id=$1
+        `,
+        [playerId]
+    );
+
+    for (const a of assets.rows) {
+        const catalog = ALL_CATALOGS[a.category] || [];
+        const item = catalog.find(x => x.id === a.asset_id);
+
+        if (item) {
+            value += num(item.price) * num(a.quantity);
+        }
+    }
+
+    const sites = await query(
+        `
+        SELECT COALESCE(SUM(value),0) AS value
+        FROM world_sites
+        WHERE owner_id=$1
+        `,
+        [playerId]
+    );
+
+    value += num(sites.rows[0].value);
+
+    return Math.round(value);
+}
+
+async function playerSummary(playerId) {
+    await processIncome(playerId);
+
+    const result = await query(
+        `
+        SELECT
+            id,
+            username,
+            email,
+            company_name,
+            country_id,
+            cash,
+            level,
+            xp,
+            total_income,
+            total_expenses,
+            last_income_at,
+            created_at
+        FROM players
+        WHERE id=$1
+        `,
+        [playerId]
+    );
+
+    if (!result.rows.length) return null;
+
+    const p = result.rows[0];
+    const netWorth = await playerNetWorth(playerId);
+
+    const assets = await query(
+        `
+        SELECT COALESCE(SUM(quantity),0)::int AS count
+        FROM player_assets
+        WHERE player_id=$1
+        `,
+        [playerId]
+    );
+
+    const grossIncome = await currentIncome(playerId);
+
+    return {
+        ...p,
+        cash: num(p.cash),
+        xp: num(p.xp),
+        level: num(p.level),
+        netWorth,
+        net_worth: netWorth,
+        netIncome: grossIncome,
+        net_income: grossIncome,
+        grossIncome,
+        gross_income: grossIncome,
+        assetCount: num(assets.rows[0].count),
+        country: COUNTRIES.find(c => c.id === p.country_id) || null
+    };
+}
+
+async function currentIncome(playerId) {
+    const assets = await query(
+        `
+        SELECT category,asset_id,quantity
+        FROM player_assets
+        WHERE player_id=$1
+        `,
+        [playerId]
+    );
+
+    let income = 0;
+
+    for (const a of assets.rows) {
+        const catalog = ALL_CATALOGS[a.category] || [];
+        const item = catalog.find(x => x.id === a.asset_id);
+
+        if (item) {
+            income += num(item.income) * num(a.quantity);
+        }
+    }
+
+    const sites = await query(
+        `
+        SELECT COALESCE(SUM(income),0) AS income
+        FROM world_sites
+        WHERE owner_id=$1
+        `,
+        [playerId]
+    );
+
+    income += num(sites.rows[0].income);
+
+    return Math.round(income);
+}
+
 /* =========================================================
-   PLAYER ASSETS
+   ASSET OPERATIONS
 ========================================================= */
 
-async function getAssetQuantity(
-    playerId,
-    itemId,
-    category
-) {
+async function buyAsset(playerId, category, assetId, quantity) {
+    const catalog = ALL_CATALOGS[category];
 
-    const result =
-        await query(
-            `SELECT quantity
-             FROM player_assets
-             WHERE player_id=$1
-               AND item_id=$2
-               AND category=$3`,
+    if (!catalog) {
+        throw new Error('Invalid asset category');
+    }
+
+    const item = catalog.find(x => x.id === assetId);
+
+    if (!item) {
+        throw new Error('Asset not found');
+    }
+
+    quantity = Math.floor(num(quantity, 1));
+
+    if (quantity < 1 || quantity > 1000000) {
+        throw new Error('Invalid quantity');
+    }
+
+    const player = await query(
+        `SELECT cash,level FROM players WHERE id=$1`,
+        [playerId]
+    );
+
+    if (!player.rows.length) {
+        throw new Error('Player not found');
+    }
+
+    if (num(player.rows[0].level) < num(item.level)) {
+        throw new Error(`Level ${item.level} required`);
+    }
+
+    const cost = num(item.price) * quantity;
+
+    if (num(player.rows[0].cash) < cost) {
+        throw new Error('Not enough cash');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,
+                total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, playerId]
+        );
+
+        await client.query(
+            `
+            INSERT INTO player_assets
+            (id,player_id,category,asset_id,quantity)
+            VALUES($1,$2,$3,$4,$5)
+            ON CONFLICT(player_id,category,asset_id)
+            DO UPDATE SET quantity=player_assets.quantity+EXCLUDED.quantity
+            `,
+            [id(), playerId, category, assetId, quantity]
+        );
+    });
+
+    return {
+        asset: item,
+        quantity,
+        cost,
+        player: await playerSummary(playerId)
+    };
+}
+
+/* =========================================================
+   AUTH
+========================================================= */
+
+async function register(req, res) {
+    const b = await body(req);
+
+    const username = safeName(b.username || b.name, '');
+    const email = String(b.email || '').trim().toLowerCase();
+    const password = String(b.password || '');
+    const companyName = safeName(
+        b.companyName || b.company || 'New Company',
+        'New Company'
+    );
+
+    if (!username || username.length < 3) {
+        return error(res, 400, 'Username must contain at least 3 characters');
+    }
+
+    if (password.length < 4) {
+        return error(res, 400, 'Password must contain at least 4 characters');
+    }
+
+    const existing = await query(
+        `
+        SELECT id
+        FROM players
+        WHERE LOWER(username)=LOWER($1)
+           OR ($2<>'' AND LOWER(email)=LOWER($2))
+        LIMIT 1
+        `,
+        [username, email]
+    );
+
+    if (existing.rows.length) {
+        return error(res, 409, 'Username or email already exists');
+    }
+
+    const playerId = id();
+
+    await transaction(async client => {
+        await client.query(
+            `
+            INSERT INTO players
+            (id,username,email,password_hash,company_name,country_id)
+            VALUES($1,$2,$3,$4,$5,'india')
+            `,
             [
                 playerId,
-                itemId,
-                category
+                username,
+                email || null,
+                hashPassword(password),
+                companyName
             ]
         );
 
-    return result.rows.length
-        ? Number(result.rows[0].quantity)
-        : 0;
-}
-
-async function addAsset(
-    playerId,
-    itemId,
-    category,
-    quantity
-) {
-
-    await query(
-        `INSERT INTO player_assets
-         (
-            player_id,
-            item_id,
-            category,
-            quantity
-         )
-         VALUES ($1,$2,$3,$4)
-         ON CONFLICT(player_id,item_id,category)
-         DO UPDATE SET
-            quantity =
-                player_assets.quantity +
-                EXCLUDED.quantity,
-            updated_at = NOW()`,
-        [
-            playerId,
-            itemId,
-            category,
-            quantity
-        ]
-    );
-}
-
-/* =========================================================
-   CONCESSION CHECK
-========================================================= */
-
-async function hasConcession(
-    playerId,
-    concessionName
-) {
-
-    const result =
-        await query(
-            `SELECT pc.concession_id
-             FROM player_concessions pc
-             WHERE pc.player_id=$1`,
+        await client.query(
+            `
+            INSERT INTO army(player_id)
+            VALUES($1)
+            ON CONFLICT(player_id) DO NOTHING
+            `,
             [playerId]
         );
 
-    const wanted =
-        normalize(concessionName);
-
-    return result.rows.some(row => {
-
-        const found =
-            catalogById(row.concession_id);
-
-        return (
-            normalize(row.concession_id) ===
-                wanted ||
-            (
-                found &&
-                normalize(found.name) ===
-                    wanted
-            )
+        await client.query(
+            `
+            INSERT INTO research(player_id)
+            VALUES($1)
+            ON CONFLICT(player_id) DO NOTHING
+            `,
+            [playerId]
         );
+
+        await client.query(
+            `
+            INSERT INTO marketing_stats(player_id)
+            VALUES($1)
+            ON CONFLICT(player_id) DO NOTHING
+            `,
+            [playerId]
+        );
+
+        await client.query(
+            `
+            INSERT INTO space_program(player_id)
+            VALUES($1)
+            ON CONFLICT(player_id) DO NOTHING
+            `,
+            [playerId]
+        );
+
+        for (const c of CHALLENGES) {
+            await client.query(
+                `
+                INSERT INTO business_challenges(player_id,challenge_id)
+                VALUES($1,$2)
+                ON CONFLICT DO NOTHING
+                `,
+                [playerId, c.id]
+            );
+        }
+
+        for (const c of CEO_UPGRADES) {
+            await client.query(
+                `
+                INSERT INTO ceo_upgrades(player_id,upgrade_id)
+                VALUES($1,$2)
+                ON CONFLICT DO NOTHING
+                `,
+                [playerId, c.id]
+            );
+        }
+
+        for (const c of COUNTRIES) {
+            await client.query(
+                `
+                INSERT INTO country_relations(player_id,country_id)
+                VALUES($1,$2)
+                ON CONFLICT DO NOTHING
+                `,
+                [playerId, c.id]
+            );
+        }
+    });
+
+    return json(res, 201, {
+        success: true,
+        message: 'Account created successfully',
+        playerId
+    });
+}
+
+async function login(req, res) {
+    const b = await body(req);
+
+    const username = String(
+        b.username || b.email || b.login || ''
+    ).trim();
+
+    const password = String(b.password || '');
+
+    const result = await query(
+        `
+        SELECT *
+        FROM players
+        WHERE LOWER(username)=LOWER($1)
+           OR LOWER(email)=LOWER($1)
+        LIMIT 1
+        `,
+        [username]
+    );
+
+    if (!result.rows.length) {
+        return error(res, 401, 'Invalid username or password');
+    }
+
+    const player = result.rows[0];
+
+    if (player.password_hash !== hashPassword(password)) {
+        return error(res, 401, 'Invalid username or password');
+    }
+
+    const accessToken = token();
+
+    await query(
+        `
+        INSERT INTO sessions(token,player_id,expires_at)
+        VALUES($1,$2,NOW()+INTERVAL '30 days')
+        `,
+        [accessToken, player.id]
+    );
+
+    return json(res, 200, {
+        success: true,
+        token: accessToken,
+        accessToken,
+        player: await playerSummary(player.id)
     });
 }
 
 /* =========================================================
-   UNLOCK CHECK
+   ASSETS
 ========================================================= */
 
-async function checkUnlock(
-    player,
-    catalogItem
-) {
-
-    if (!catalogItem) {
-        return {
-            unlocked: false,
-            reason: "Item not found"
-        };
-    }
-
-    if (
-        catalogItem.price == null &&
-        (
-            catalogItem.category === "business" ||
-            catalogItem.category === "transportation" ||
-            catalogItem.category === "property" ||
-            catalogItem.category === "concession"
-        )
-    ) {
-
-        /*
-         * Do not invent an original-game price.
-         * Items with no visible source price cannot be
-         * purchased through the reference purchase API yet.
-         *
-         * Their visible unlock requirement is still shown.
-         */
-    }
-
-    const level =
-        Number(player.level || 1);
-
-    if (
-        catalogItem.unlockLevel &&
-        level <
-            Number(catalogItem.unlockLevel)
-    ) {
-
-        return {
-            unlocked: false,
-            reason:
-                `Require level ${catalogItem.unlockLevel}`
-        };
-    }
-
-    if (
-        catalogItem.productionTech &&
-        Number(player.production_tech || 0) <
-            Number(catalogItem.productionTech)
-    ) {
-
-        return {
-            unlocked: false,
-            reason:
-                `Require production tech level ${catalogItem.productionTech}`
-        };
-    }
-
-    if (catalogItem.concession) {
-
-        const owns =
-            await hasConcession(
-                player.id,
-                catalogItem.concession
-            );
-
-        if (!owns) {
-
-            return {
-                unlocked: false,
-                reason:
-                    `Require ${catalogItem.concession} concession`
-            };
-        }
-    }
-
-    return {
-        unlocked: true,
-        reason: null
-    };
-}
-
-/* =========================================================
-   INCOME
-========================================================= */
-
-async function processIncome(playerId) {
-
-    const playerResult =
-        await query(
-            `SELECT *
-             FROM players
-             WHERE id=$1`,
-            [playerId]
-        );
-
-    if (!playerResult.rows.length) {
-        return null;
-    }
-
-    const player =
-        playerResult.rows[0];
-
-    const last =
-        new Date(player.last_income_at);
-
-    const current =
-        new Date();
-
-    let cycles =
-        Math.floor(
-            (current - last) /
-            60000
-        );
-
-    /*
-     * Maximum 24 hours of offline income.
-     */
-    cycles =
-        Math.min(
-            Math.max(cycles, 0),
-            1440
-        );
-
-    if (cycles <= 0) {
-        return player;
-    }
-
-    const assets =
-        await query(
-            `SELECT *
-             FROM player_assets
-             WHERE player_id=$1
-               AND quantity > 0`,
-            [playerId]
-        );
-
-    let incomePerMinute = 0;
-
-    for (const asset of assets.rows) {
-
-        const catalog =
-            catalogById(asset.item_id);
-
-        if (!catalog) {
-            continue;
-        }
-
-        if (catalog.price == null) {
-            continue;
-        }
-
-        /*
-         * This is the server's economy formula.
-         * It is deliberately separate from the visible
-         * reference purchase price.
-         */
-        let rate = 0;
-
-        if (
-            asset.category ===
-            "business"
-        ) {
-            rate =
-                Number(catalog.price) *
-                0.01;
-        }
-
-        if (
-            asset.category ===
-            "transportation"
-        ) {
-            rate =
-                Number(catalog.price) *
-                0.015;
-        }
-
-        if (
-            asset.category ===
-            "property"
-        ) {
-            rate =
-                Number(catalog.price) *
-                0.0005;
-        }
-
-        if (
-            asset.category ===
-            "subsidiary"
-        ) {
-            rate =
-                Number(catalog.price) *
-                0.005;
-        }
-
-        incomePerMinute +=
-            rate *
-            Number(asset.quantity);
-    }
-
-    /*
-     * Marketing multiplier.
-     */
-    const marketing =
-        await query(
-            `SELECT COALESCE(MAX(multiplier),1)
-             AS multiplier
-             FROM marketing_campaigns
-             WHERE player_id=$1
-               AND starts_at <= NOW()
-               AND ends_at > NOW()`,
-            [playerId]
-        );
-
-    const multiplier =
-        Number(
-            marketing.rows[0]?.multiplier || 1
-        );
-
-    const totalIncome =
-        Math.round(
-            incomePerMinute *
-            cycles *
-            multiplier
-        );
-
-    if (totalIncome > 0) {
-
-        await query(
-            `UPDATE players
-             SET cash = cash + $1,
-                 last_income_at = NOW(),
-                 updated_at = NOW()
-             WHERE id=$2`,
-            [
-                totalIncome,
-                playerId
-            ]
-        );
-
-    } else {
-
-        await query(
-            `UPDATE players
-             SET last_income_at = NOW(),
-                 updated_at = NOW()
-             WHERE id=$1`,
-            [playerId]
-        );
-    }
-
-    await updateLevel(playerId);
-
-    return (
-        await query(
-            `SELECT *
-             FROM players
-             WHERE id=$1`,
-            [playerId]
-        )
-    ).rows[0];
-}
-
-/* =========================================================
-   PLAYER SUMMARY
-========================================================= */
-
-async function playerSummary(playerId) {
-
-    await processIncome(playerId);
-
-    await updateLevel(playerId);
-
-    const playerResult =
-        await query(
-            `SELECT *
-             FROM players
-             WHERE id=$1`,
-            [playerId]
-        );
-
-    if (!playerResult.rows.length) {
-        return null;
-    }
-
-    const player =
-        playerResult.rows[0];
-
-    const assets =
-        await query(
-            `SELECT *
-             FROM player_assets
-             WHERE player_id=$1
-               AND quantity > 0
-             ORDER BY category,item_id`,
-            [playerId]
-        );
-
-    let assetValue = 0;
-
-    for (const asset of assets.rows) {
-
-        const catalog =
-            catalogById(asset.item_id);
-
-        if (
-            catalog &&
-            catalog.price != null
-        ) {
-            assetValue +=
-                Number(catalog.price) *
-                Number(asset.quantity);
-        }
-    }
-
-    const loans =
-        await query(
-            `SELECT
-                COALESCE(
-                    SUM(remaining),
-                    0
-                ) AS total
-             FROM loans
-             WHERE player_id=$1`,
-            [playerId]
-        );
-
-    const loanValue =
-        Number(
-            loans.rows[0]?.total || 0
-        );
-
-    const netWorth =
-        Number(player.cash || 0) +
-        assetValue -
-        loanValue;
-
-    await query(
-        `UPDATE players
-         SET net_worth=$1,
-             updated_at=NOW()
-         WHERE id=$2`,
-        [
-            netWorth,
-            playerId
-        ]
-    );
-
-    const title =
-        LEVELS.find(
-            x =>
-                x.level ===
-                Number(player.level)
-        )?.title ||
-        "Businessman";
-
-    return {
-        id: Number(player.id),
-
-        username:
-            player.username,
-
-        company:
-            player.company_name,
-
-        companyName:
-            player.company_name,
-
-        ceo:
-            player.username,
-
-        country:
-            player.country,
-
-        cash:
-            Number(player.cash),
-
-        goldCoins:
-            Number(player.gold_coins),
-
-        level:
-            Number(player.level),
-
-        xp:
-            Number(player.xp),
-
-        title,
-
-        productionTech:
-            Number(player.production_tech),
-
-        netWorth:
-            Number(netWorth),
-
-        assetsValue:
-            Number(assetValue),
-
-        loans:
-            Number(loanValue),
-
-        lastIncomeAt:
-            player.last_income_at,
-
-        assets:
-            assets.rows
-    };
-}
-
-/* =========================================================
-   REGISTRATION
-========================================================= */
-
-async function register(
-    req,
-    res,
-    body
-) {
-
-    const username =
-        String(
-            body.username ||
-            body.email ||
-            ""
-        ).trim();
-
-    const password =
-        String(
-            body.password ||
-            ""
-        );
-
-    const companyName =
-        String(
-            body.companyName ||
-            body.company ||
-            `${username} Corporation`
-        ).trim();
-
-    const country =
-        String(
-            body.country ||
-            "India"
-        ).trim();
-
-    if (
-        username.length < 3 ||
-        username.length > 40
-    ) {
-        return error(
-            res,
-            400,
-            "Username must be 3-40 characters"
-        );
-    }
-
-    if (password.length < 4) {
-        return error(
-            res,
-            400,
-            "Password must contain at least 4 characters"
-        );
-    }
-
-    const existing =
-        await query(
-            `SELECT id
-             FROM players
-             WHERE LOWER(username)=LOWER($1)`,
-            [username]
-        );
-
-    if (existing.rows.length) {
-        return error(
-            res,
-            409,
-            "Username already exists"
-        );
-    }
-
-    const passwordHash =
-        await hashPassword(password);
-
-    const player =
-        await transaction(
-            async client => {
-
-                const result =
-                    await client.query(
-                        `INSERT INTO players
-                         (
-                            username,
-                            password_hash,
-                            company_name,
-                            country,
-                            cash
-                         )
-                         VALUES
-                         ($1,$2,$3,$4,10000)
-                         RETURNING *`,
-                        [
-                            username,
-                            passwordHash,
-                            companyName,
-                            country
-                        ]
-                    );
-
-                const created =
-                    result.rows[0];
-
-                await client.query(
-                    `INSERT INTO armies
-                     (player_id)
-                     VALUES ($1)
-                     ON CONFLICT DO NOTHING`,
-                    [created.id]
-                );
-
-                await client.query(
-                    `INSERT INTO space_program
-                     (player_id)
-                     VALUES ($1)
-                     ON CONFLICT DO NOTHING`,
-                    [created.id]
-                );
-
-                return created;
-            }
-        );
-
-    return send(
-        res,
-        201,
-        {
-            ok: true,
-            message:
-                "Account created successfully",
-            playerId:
-                Number(player.id)
-        }
-    );
-}
-
-/* =========================================================
-   LOGIN
-========================================================= */
-
-async function login(
-    req,
-    res,
-    body
-) {
-
-    const username =
-        String(
-            body.username ||
-            body.email ||
-            ""
-        ).trim();
-
-    const password =
-        String(
-            body.password ||
-            ""
-        );
-
-    const result =
-        await query(
-            `SELECT *
-             FROM players
-             WHERE LOWER(username)=LOWER($1)`,
-            [username]
-        );
-
-    if (!result.rows.length) {
-        return error(
-            res,
-            401,
-            "Invalid username or password"
-        );
-    }
-
-    const player =
-        result.rows[0];
-
-    const valid =
-        await verifyPassword(
-            password,
-            player.password_hash
-        );
-
-    if (!valid) {
-        return error(
-            res,
-            401,
-            "Invalid username or password"
-        );
-    }
-
-    const token =
-        randomId(32);
-
-    await query(
-        `INSERT INTO sessions
-         (token,player_id)
-         VALUES ($1,$2)`,
-        [
-            token,
-            player.id
-        ]
-    );
-
-    const summary =
-        await playerSummary(
-            player.id
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            token,
-            accessToken: token,
-            player: summary
-        }
-    );
-}
-
-/* =========================================================
-   CATALOG RESPONSE
-========================================================= */
-
-function catalogForPlayer(
-    player,
-    ownedConcessions = []
-) {
-
-    const concessionNames =
-        ownedConcessions.map(
-            x =>
-                normalize(
-                    x.name || x.concession_id || x
-                )
-        );
-
-    return CATALOG.map(
-        data => {
-
-            let unlocked = true;
-            let reason = null;
-
-            if (
-                data.unlockLevel &&
-                Number(player.level) <
-                    Number(data.unlockLevel)
-            ) {
-                unlocked = false;
-                reason =
-                    `Require level ${data.unlockLevel}`;
-            }
-
-            if (
-                unlocked &&
-                data.productionTech &&
-                Number(player.production_tech) <
-                    Number(data.productionTech)
-            ) {
-                unlocked = false;
-                reason =
-                    `Require production tech level ${data.productionTech}`;
-            }
-
-            if (
-                unlocked &&
-                data.concession
-            ) {
-
-                const wanted =
-                    normalize(
-                        data.concession
-                    );
-
-                if (
-                    !concessionNames.includes(
-                        wanted
-                    )
-                ) {
-                    unlocked = false;
-                    reason =
-                        `Require ${data.concession} concession`;
-                }
-            }
-
-            return {
-                ...data,
-                unlocked,
-                lockedReason: reason
-            };
-        }
-    );
-}
-
-/* =========================================================
-   ASSET LIST
-========================================================= */
-
-async function assets(
-    req,
-    res,
-    player
-) {
-
-    const category =
-        req.query.get("category");
-
-    const ownedResult =
-        await query(
-            `SELECT *
-             FROM player_assets
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    const owned = new Map();
-
-    for (const row of ownedResult.rows) {
-        owned.set(
-            `${row.category}:${row.item_id}`,
-            Number(row.quantity)
-        );
-    }
-
-    let list;
+async function assets(req, res, player) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const category = url.searchParams.get('category');
 
     if (category) {
-        list =
-            catalogCategory(
-                category
-            );
-    } else {
-        list = CATALOG;
-    }
+        const catalog = ALL_CATALOGS[category] || [];
 
-    const concessions =
-        await query(
-            `SELECT concession_id
-             FROM player_concessions
-             WHERE player_id=$1`,
-            [player.id]
+        const owned = await query(
+            `
+            SELECT asset_id,quantity
+            FROM player_assets
+            WHERE player_id=$1 AND category=$2
+            `,
+            [player.id, category]
         );
 
-    const output =
-        catalogForPlayer(
-            player,
-            concessions.rows
-        ).filter(
-            x =>
-                !category ||
-                normalize(x.category) ===
-                    normalize(category)
-        )
-        .map(
-            x => ({
-                ...x,
+        const map = {};
 
-                owned:
-                    owned.get(
-                        `${x.category}:${x.id}`
-                    ) || 0
-            })
-        );
+        for (const row of owned.rows) {
+            map[row.asset_id] = num(row.quantity);
+        }
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
+        return json(res, 200, {
+            success: true,
             category,
-            items: output
-        }
+            assets: catalog.map(x => ({
+                ...x,
+                owned: map[x.id] || 0
+            }))
+        });
+    }
+
+    return json(res, 200, {
+        success: true,
+        categories: Object.keys(ALL_CATALOGS)
+    });
+}
+
+async function buy(req, res, player) {
+    const b = await body(req);
+
+    const category = String(
+        b.category || b.type || ''
+    ).trim();
+
+    const assetId = String(
+        b.assetId || b.asset || b.itemId || b.id || ''
+    ).trim();
+
+    const quantity = num(
+        b.quantity || b.amount || 1,
+        1
     );
+
+    try {
+        const result = await buyAsset(
+            player.id,
+            category,
+            assetId,
+            quantity
+        );
+
+        return json(res, 200, {
+            success: true,
+            ...result
+        });
+    } catch (e) {
+        return error(res, 400, e.message);
+    }
 }
 
 /* =========================================================
-   BUY ASSET
+   WORLD
 ========================================================= */
 
-async function buyAsset(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const itemId =
-        String(
-            body.itemId ||
-            body.assetId ||
-            body.id ||
-            ""
-        );
-
-    const quantity =
-        Math.max(
-            1,
-            Math.floor(
-                Number(
-                    body.quantity || 1
-                )
-            )
-        );
-
-    const catalogItem =
-        catalogById(itemId);
-
-    if (!catalogItem) {
-        return error(
-            res,
-            404,
-            "Item not found"
-        );
-    }
-
-    if (
-        catalogItem.price == null
-    ) {
-        return error(
-            res,
-            400,
-            "Reference price for this item is not available"
-        );
-    }
-
-    const unlocked =
-        await checkUnlock(
-            player,
-            catalogItem
-        );
-
-    if (!unlocked.unlocked) {
-        return error(
-            res,
-            403,
-            unlocked.reason,
-            {
-                itemLocked: true
-            }
-        );
-    }
-
-    const total =
-        Number(catalogItem.price) *
-        quantity;
-
-    if (
-        Number(player.cash) <
-        total
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash",
-            {
-                required: total,
-                cash: Number(player.cash)
-            }
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1,
-                     xp=xp+$2,
-                     updated_at=NOW()
-                 WHERE id=$3`,
-                [
-                    total,
-                    Math.max(1, Math.floor(total / 100)),
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO player_assets
-                 (
-                    player_id,
-                    item_id,
-                    category,
-                    quantity
-                 )
-                 VALUES ($1,$2,$3,$4)
-                 ON CONFLICT
-                    (player_id,item_id,category)
-                 DO UPDATE SET
-                    quantity =
-                        player_assets.quantity +
-                        EXCLUDED.quantity,
-                    updated_at=NOW()`,
-                [
-                    player.id,
-                    catalogItem.id,
-                    catalogItem.category,
-                    quantity
-                ]
-            );
-        }
+async function worldSites(req, res, player) {
+    const result = await query(
+        `
+        SELECT
+            ws.*,
+            CASE WHEN ws.owner_id=$1 THEN TRUE ELSE FALSE END AS owned
+        FROM world_sites ws
+        ORDER BY ws.country_id,ws.name
+        `,
+        [player.id]
     );
 
-    await updateLevel(player.id);
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            purchased: {
-                id: catalogItem.id,
-                name: catalogItem.name,
-                quantity,
-                unitPrice:
-                    catalogItem.price,
-                total
-            },
-            player:
-                await playerSummary(player.id)
-        }
-    );
+    return json(res, 200, {
+        success: true,
+        sites: result.rows
+    });
 }
 
-/* =========================================================
-   SELL ASSET
-========================================================= */
+async function claimWorldSite(req, res, player) {
+    const b = await body(req);
+    const siteId = String(b.siteId || b.id || '');
 
-async function sellAsset(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const itemId =
-        String(
-            body.itemId ||
-            body.assetId ||
-            body.id ||
-            ""
-        );
-
-    const quantity =
-        Math.max(
-            1,
-            Math.floor(
-                Number(
-                    body.quantity || 1
-                )
-            )
-        );
-
-    const catalogItem =
-        catalogById(itemId);
-
-    if (!catalogItem) {
-        return error(
-            res,
-            404,
-            "Item not found"
-        );
-    }
-
-    if (catalogItem.price == null) {
-        return error(
-            res,
-            400,
-            "Item has no reference sale price"
-        );
-    }
-
-    const existing =
-        await query(
-            `SELECT quantity
-             FROM player_assets
-             WHERE player_id=$1
-               AND item_id=$2
-               AND category=$3`,
-            [
-                player.id,
-                catalogItem.id,
-                catalogItem.category
-            ]
-        );
-
-    const owned =
-        existing.rows.length
-            ? Number(existing.rows[0].quantity)
-            : 0;
-
-    if (owned < quantity) {
-        return error(
-            res,
-            400,
-            "Not enough items owned"
-        );
-    }
-
-    const saleValue =
-        Math.floor(
-            Number(catalogItem.price) *
-            quantity *
-            0.8
-        );
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE player_assets
-                 SET quantity=quantity-$1,
-                     updated_at=NOW()
-                 WHERE player_id=$2
-                   AND item_id=$3
-                   AND category=$4`,
-                [
-                    quantity,
-                    player.id,
-                    catalogItem.id,
-                    catalogItem.category
-                ]
-            );
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash+$1,
-                     updated_at=NOW()
-                 WHERE id=$2`,
-                [
-                    saleValue,
-                    player.id
-                ]
-            );
-        }
+    const result = await query(
+        `SELECT * FROM world_sites WHERE id=$1`,
+        [siteId]
     );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            sold: quantity,
-            received: saleValue
-        }
-    );
-}
-
-/* =========================================================
-   CONCESSIONS
-========================================================= */
-
-async function concessions(
-    req,
-    res,
-    player
-) {
-
-    const owned =
-        await query(
-            `SELECT concession_id
-             FROM player_concessions
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    const ownedSet =
-        new Set(
-            owned.rows.map(
-                x => x.concession_id
-            )
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-
-            concessions:
-                CONCESSIONS.map(
-                    x => ({
-                        ...x,
-                        owned:
-                            ownedSet.has(x.id)
-                    })
-                )
-        }
-    );
-}
-
-async function buyConcession(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const id =
-        String(
-            body.id ||
-            body.itemId ||
-            body.concessionId ||
-            ""
-        );
-
-    const concession =
-        CONCESSIONS.find(
-            x => x.id === id
-        );
-
-    if (!concession) {
-        return error(
-            res,
-            404,
-            "Concession not found"
-        );
-    }
-
-    const existing =
-        await query(
-            `SELECT 1
-             FROM player_concessions
-             WHERE player_id=$1
-               AND concession_id=$2`,
-            [
-                player.id,
-                id
-            ]
-        );
-
-    if (existing.rows.length) {
-        return error(
-            res,
-            400,
-            "Already owned"
-        );
-    }
-
-    if (
-        Number(player.cash) <
-        Number(concession.price)
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash"
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1,
-                     xp=xp+$2,
-                     updated_at=NOW()
-                 WHERE id=$3`,
-                [
-                    concession.price,
-                    Math.floor(
-                        concession.price / 100
-                    ),
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO player_concessions
-                 (player_id,concession_id)
-                 VALUES ($1,$2)`,
-                [
-                    player.id,
-                    id
-                ]
-            );
-        }
-    );
-
-    await updateLevel(player.id);
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            concession
-        }
-    );
-}
-
-/* =========================================================
-   RESEARCH
-========================================================= */
-
-async function research(
-    req,
-    res,
-    player
-) {
-
-    const owned =
-        await query(
-            `SELECT *
-             FROM research
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    const map =
-        new Map(
-            owned.rows.map(
-                x => [
-                    x.research_id,
-                    Number(x.level)
-                ]
-            )
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            research:
-                RESEARCH.map(
-                    x => ({
-                        ...x,
-                        level:
-                            map.get(x.id) || 0,
-                        owned:
-                            map.has(x.id)
-                    })
-                )
-        }
-    );
-}
-
-/* =========================================================
-   RESEARCH BUY
-========================================================= */
-
-async function buyResearch(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const id =
-        String(
-            body.id ||
-            body.researchId ||
-            ""
-        );
-
-    const researchItem =
-        RESEARCH.find(
-            x => x.id === id
-        );
-
-    if (!researchItem) {
-        return error(
-            res,
-            404,
-            "Research not found"
-        );
-    }
-
-    const existing =
-        await query(
-            `SELECT level
-             FROM research
-             WHERE player_id=$1
-               AND research_id=$2`,
-            [
-                player.id,
-                id
-            ]
-        );
-
-    if (existing.rows.length) {
-        return error(
-            res,
-            400,
-            "Research already unlocked"
-        );
-    }
-
-    const requirement =
-        String(
-            researchItem.requirement || ""
-        );
-
-    const coinMatch =
-        requirement.match(
-            /(\d+)\s*coins?/i
-        );
-
-    const requiredCoins =
-        coinMatch
-            ? Number(coinMatch[1])
-            : 0;
-
-    if (
-        Number(player.gold_coins) <
-        requiredCoins
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough gold coins"
-        );
-    }
-
-    const levelMatch =
-        requirement.match(
-            /level\s*(\d+)/i
-        );
-
-    if (
-        levelMatch &&
-        Number(player.level) <
-            Number(levelMatch[1])
-    ) {
-        return error(
-            res,
-            403,
-            `Require level ${levelMatch[1]}`
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET gold_coins =
-                     gold_coins-$1,
-                     updated_at=NOW()
-                 WHERE id=$2`,
-                [
-                    requiredCoins,
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO research
-                 (player_id,research_id,level)
-                 VALUES ($1,$2,1)`,
-                [
-                    player.id,
-                    id
-                ]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            research: researchItem
-        }
-    );
-}
-
-/* =========================================================
-   WORLD SITES
-========================================================= */
-
-async function worldSites(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT
-                ws.*,
-                CASE
-                    WHEN ws.owner_id=$1
-                    THEN TRUE
-                    ELSE FALSE
-                END AS owned
-             FROM world_sites ws
-             ORDER BY ws.id`,
-            [player.id]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            sites: result.rows
-        }
-    );
-}
-
-async function claimWorldSite(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const siteId =
-        Number(
-            body.siteId ||
-            body.id
-        );
-
-    const result =
-        await query(
-            `SELECT *
-             FROM world_sites
-             WHERE id=$1`,
-            [siteId]
-        );
 
     if (!result.rows.length) {
-        return error(
-            res,
-            404,
-            "World site not found"
-        );
+        return error(res, 404, 'World site not found');
     }
 
-    const site =
-        result.rows[0];
+    const site = result.rows[0];
 
-    if (site.owner_id) {
-        return error(
-            res,
-            400,
-            "World site already owned"
-        );
+    if (site.owner_id && site.owner_id !== player.id) {
+        return error(res, 409, 'This site is already owned');
     }
 
-    await query(
-        `UPDATE world_sites
-         SET owner_id=$1
-         WHERE id=$2`,
-        [
-            player.id,
-            siteId
-        ]
-    );
+    if (site.owner_id === player.id) {
+        return error(res, 400, 'You already own this site');
+    }
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            site
-        }
-    );
+    const cost = num(site.value);
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
+        );
+
+        await client.query(
+            `
+            UPDATE world_sites
+            SET owner_id=$1
+            WHERE id=$2 AND owner_id IS NULL
+            `,
+            [player.id, siteId]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        message: 'World site claimed',
+        siteId,
+        player: await playerSummary(player.id)
+    });
 }
 
 /* =========================================================
    RANKINGS
 ========================================================= */
 
-async function rankings(
-    req,
-    res
-) {
-
-    const result =
-        await query(
-            `SELECT
-                id,
-                username,
-                company_name,
-                country,
-                level,
-                net_worth
-             FROM players
-             ORDER BY net_worth DESC
-             LIMIT 100`
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            rankings:
-                result.rows.map(
-                    (x, index) => ({
-                        rank: index + 1,
-                        id: Number(x.id),
-                        username: x.username,
-                        company:
-                            x.company_name,
-                        country: x.country,
-                        level:
-                            Number(x.level),
-                        worth:
-                            Number(x.net_worth)
-                    })
-                )
-        }
+async function rankings(req, res) {
+    const result = await query(
+        `
+        SELECT
+            p.id,
+            p.username,
+            p.company_name,
+            p.country_id,
+            p.level,
+            p.xp,
+            p.cash,
+            (
+                p.cash +
+                COALESCE((
+                    SELECT SUM(pa.quantity * (
+                        CASE pa.category
+                            WHEN 'transportation' THEN 0
+                            WHEN 'businesses' THEN 0
+                            WHEN 'concessions' THEN 0
+                            WHEN 'subsidiaries' THEN 0
+                            WHEN 'investments' THEN 0
+                            WHEN 'properties' THEN 0
+                            WHEN 'resources' THEN 0
+                            ELSE 0
+                        END
+                    ))
+                    FROM player_assets pa
+                    WHERE pa.player_id=p.id
+                ),0)
+            ) AS ranking_cash
+        FROM players p
+        ORDER BY p.cash DESC,p.xp DESC
+        LIMIT 100
+        `
     );
-}
 
-/* =========================================================
-   ARMY
-========================================================= */
+    const rows = [];
 
-async function army(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT *
-             FROM armies
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    if (!result.rows.length) {
-
-        await query(
-            `INSERT INTO armies
-             (player_id)
-             VALUES ($1)
-             ON CONFLICT DO NOTHING`,
-            [player.id]
-        );
+    for (const r of result.rows) {
+        rows.push({
+            id: r.id,
+            username: r.username,
+            companyName: r.company_name,
+            company_name: r.company_name,
+            countryId: r.country_id,
+            level: num(r.level),
+            xp: num(r.xp),
+            cash: num(r.cash),
+            netWorth: await playerNetWorth(r.id)
+        });
     }
 
-    const armyResult =
-        await query(
-            `SELECT *
-             FROM armies
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    const a =
-        armyResult.rows[0];
-
-    const power =
-        Number(a.ground) * 10 +
-        Number(a.air) * 20 +
-        Number(a.defense) * 15 +
-        Number(a.offensive) * 15;
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            army: {
-                ground:
-                    Number(a.ground),
-                air:
-                    Number(a.air),
-                defense:
-                    Number(a.defense),
-                offensive:
-                    Number(a.offensive),
-                militaryPower:
-                    power
-            }
-        }
-    );
-}
-
-/* =========================================================
-   ARMY UPGRADE
-========================================================= */
-
-async function armyUpgrade(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const type =
-        normalize(
-            body.type ||
-            body.unit ||
-            ""
-        );
-
-    const allowed = [
-        "ground",
-        "air",
-        "defense",
-        "offensive"
-    ];
-
-    if (!allowed.includes(type)) {
-        return error(
-            res,
-            400,
-            "Invalid army upgrade"
-        );
-    }
-
-    const result =
-        await query(
-            `SELECT *
-             FROM armies
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    if (!result.rows.length) {
-        return error(
-            res,
-            400,
-            "Army not initialized"
-        );
-    }
-
-    const a =
-        result.rows[0];
-
-    const current =
-        Number(a[type]);
-
-    const cost =
-        5000 *
-        Math.pow(
-            2,
-            Math.min(current - 1, 15)
-        );
-
-    if (
-        Number(player.cash) <
-        cost
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash",
-            { cost }
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1,
-                     xp=xp+100
-                 WHERE id=$2`,
-                [
-                    cost,
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `UPDATE armies
-                 SET ${type}=${type}+1,
-                     updated_at=NOW()
-                 WHERE player_id=$1`,
-                [player.id]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            upgraded: type,
-            cost
-        }
-    );
-}
-
-/* =========================================================
-   WARS
-========================================================= */
-
-async function createWar(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const target =
-        Number(
-            body.targetPlayerId ||
-            body.targetId
-        );
-
-    if (
-        !Number.isInteger(target) ||
-        target === Number(player.id)
-    ) {
-        return error(
-            res,
-            400,
-            "Invalid target"
-        );
-    }
-
-    const targetResult =
-        await query(
-            `SELECT id
-             FROM players
-             WHERE id=$1`,
-            [target]
-        );
-
-    if (!targetResult.rows.length) {
-        return error(
-            res,
-            404,
-            "Target player not found"
-        );
-    }
-
-    const attacker =
-        await query(
-            `SELECT *
-             FROM armies
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    const defender =
-        await query(
-            `SELECT *
-             FROM armies
-             WHERE player_id=$1`,
-            [target]
-        );
-
-    const attackerArmy =
-        attacker.rows[0] || {
-            ground: 1,
-            air: 0,
-            defense: 1,
-            offensive: 1
-        };
-
-    const defenderArmy =
-        defender.rows[0] || {
-            ground: 1,
-            air: 0,
-            defense: 1,
-            offensive: 1
-        };
-
-    const attackerPower =
-        Number(attackerArmy.ground) * 10 +
-        Number(attackerArmy.air) * 20 +
-        Number(attackerArmy.defense) * 15 +
-        Number(attackerArmy.offensive) * 15;
-
-    const defenderPower =
-        Number(defenderArmy.ground) * 10 +
-        Number(defenderArmy.air) * 20 +
-        Number(defenderArmy.defense) * 15 +
-        Number(defenderArmy.offensive) * 15;
-
-    const result =
-        await query(
-            `INSERT INTO wars
-             (
-                attacker_id,
-                defender_id,
-                attacker_power,
-                defender_power,
-                status
-             )
-             VALUES ($1,$2,$3,$4,'resolved')
-             RETURNING *`,
-            [
-                player.id,
-                target,
-                attackerPower,
-                defenderPower
-            ]
-        );
-
-    const war =
-        result.rows[0];
-
-    let winner = "draw";
-
-    if (attackerPower > defenderPower) {
-        winner = "attacker";
-    } else if (
-        defenderPower > attackerPower
-    ) {
-        winner = "defender";
-    }
-
-    await query(
-        `UPDATE wars
-         SET status=$1,
-             resolved_at=NOW()
-         WHERE id=$2`,
-        [
-            winner,
-            war.id
-        ]
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            war: {
-                id: Number(war.id),
-                attackerPower,
-                defenderPower,
-                result: winner
-            }
-        }
-    );
-}
-
-/* =========================================================
-   CONTRACTS
-========================================================= */
-
-async function contracts(
-    req,
-    res
-) {
-
-    const result =
-        await query(
-            `SELECT *
-             FROM contracts
-             WHERE ends_at > NOW()
-             ORDER BY ends_at ASC`
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            contracts:
-                result.rows.map(
-                    x => ({
-                        id: Number(x.id),
-                        title: x.title,
-                        description:
-                            x.description,
-                        category: x.category,
-                        quantity:
-                            Number(x.quantity),
-                        marketValue:
-                            Number(x.market_value),
-                        minBid:
-                            Number(x.min_bid),
-                        winners:
-                            Number(x.winners),
-                        endsAt:
-                            x.ends_at
-                    })
-                )
-        }
-    );
-}
-
-/* =========================================================
-   CONTRACT BIDS
-========================================================= */
-
-async function placeBid(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const contractId =
-        Number(
-            body.contractId ||
-            body.id
-        );
-
-    const bid =
-        money(
-            body.bid ||
-            body.amount
-        );
-
-    const contractResult =
-        await query(
-            `SELECT *
-             FROM contracts
-             WHERE id=$1
-               AND ends_at > NOW()`,
-            [contractId]
-        );
-
-    if (!contractResult.rows.length) {
-        return error(
-            res,
-            404,
-            "Contract not found or expired"
-        );
-    }
-
-    const contract =
-        contractResult.rows[0];
-
-    if (
-        bid <
-        Number(contract.min_bid)
-    ) {
-        return error(
-            res,
-            400,
-            "Bid is below minimum bid",
-            {
-                minBid:
-                    Number(contract.min_bid)
-            }
-        );
-    }
-
-    const previous =
-        await query(
-            `SELECT bid
-             FROM contract_bids
-             WHERE contract_id=$1
-               AND player_id=$2`,
-            [
-                contractId,
-                player.id
-            ]
-        );
-
-    await query(
-        `INSERT INTO contract_bids
-         (contract_id,player_id,bid)
-         VALUES ($1,$2,$3)
-         ON CONFLICT(contract_id,player_id)
-         DO UPDATE SET
-            bid=EXCLUDED.bid,
-            created_at=NOW()`,
-        [
-            contractId,
-            player.id,
-            bid
-        ]
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            bid,
-            previousBid:
-                previous.rows.length
-                    ? Number(previous.rows[0].bid)
-                    : 0
-        }
-    );
-}
-
-async function contractRanking(
-    req,
-    res
-) {
-
-    const contractId =
-        Number(
-            req.query.get("contractId") ||
-            req.query.get("id")
-        );
-
-    if (!contractId) {
-        return error(
-            res,
-            400,
-            "contractId required"
-        );
-    }
-
-    const result =
-        await query(
-            `SELECT
-                cb.player_id,
-                p.username,
-                p.company_name,
-                cb.bid,
-                cb.created_at
-             FROM contract_bids cb
-             JOIN players p
-               ON p.id=cb.player_id
-             WHERE cb.contract_id=$1
-             ORDER BY cb.bid DESC`,
-            [contractId]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            bids:
-                result.rows.map(
-                    (x, index) => ({
-                        rank: index + 1,
-                        playerId:
-                            Number(x.player_id),
-                        username:
-                            x.username,
-                        company:
-                            x.company_name,
-                        bid:
-                            Number(x.bid),
-                        createdAt:
-                            x.created_at
-                    })
-                )
-        }
-    );
-}
-
-/* =========================================================
-   RUNNING CONTRACTS
-========================================================= */
-
-async function runningContracts(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT
-                c.*,
-                cb.bid
-             FROM contract_bids cb
-             JOIN contracts c
-               ON c.id=cb.contract_id
-             WHERE cb.player_id=$1
-               AND c.ends_at > NOW()
-             ORDER BY c.ends_at`,
-            [player.id]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            contracts:
-                result.rows
-        }
-    );
-}
-
-/* =========================================================
-   ALLIANCES
-========================================================= */
-
-async function alliances(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT
-                a.id,
-                a.name,
-                a.country,
-                a.leader_id,
-                COUNT(am.player_id)::int
-                    AS members
-             FROM alliances a
-             LEFT JOIN alliance_members am
-               ON am.alliance_id=a.id
-             GROUP BY a.id
-             ORDER BY members DESC`
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            alliances:
-                result.rows.map(
-                    x => ({
-                        id: Number(x.id),
-                        name: x.name,
-                        country: x.country,
-                        leaderId:
-                            x.leader_id
-                                ? Number(x.leader_id)
-                                : null,
-                        members:
-                            Number(x.members)
-                    })
-                )
-        }
-    );
-}
-
-async function createAlliance(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const name =
-        String(
-            body.name ||
-            ""
-        ).trim();
-
-    if (
-        name.length < 3 ||
-        name.length > 50
-    ) {
-        return error(
-            res,
-            400,
-            "Alliance name must be 3-50 characters"
-        );
-    }
-
-    const result =
-        await transaction(
-            async client => {
-
-                const alliance =
-                    await client.query(
-                        `INSERT INTO alliances
-                         (name,country,leader_id)
-                         VALUES ($1,$2,$3)
-                         RETURNING *`,
-                        [
-                            name,
-                            player.country,
-                            player.id
-                        ]
-                    );
-
-                const created =
-                    alliance.rows[0];
-
-                await client.query(
-                    `INSERT INTO alliance_members
-                     (alliance_id,player_id)
-                     VALUES ($1,$2)`,
-                    [
-                        created.id,
-                        player.id
-                    ]
-                );
-
-                return created;
-            }
-        );
-
-    return send(
-        res,
-        201,
-        {
-            ok: true,
-            alliance: result
-        }
-    );
-}
-
-async function joinAlliance(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const allianceId =
-        Number(
-            body.allianceId ||
-            body.id
-        );
-
-    const result =
-        await query(
-            `SELECT id
-             FROM alliances
-             WHERE id=$1`,
-            [allianceId]
-        );
-
-    if (!result.rows.length) {
-        return error(
-            res,
-            404,
-            "Alliance not found"
-        );
-    }
-
-    await query(
-        `INSERT INTO alliance_members
-         (alliance_id,player_id)
-         VALUES ($1,$2)
-         ON CONFLICT DO NOTHING`,
-        [
-            allianceId,
-            player.id
-        ]
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true
-        }
-    );
-}
-
-/* =========================================================
-   CHAT
-========================================================= */
-
-async function getChat(
-    req,
-    res
-) {
-
-    const channel =
-        req.query.get("channel") ||
-        "global";
-
-    const result =
-        await query(
-            `SELECT
-                c.id,
-                c.channel,
-                c.message,
-                c.created_at,
-                p.username,
-                p.company_name
-             FROM chat c
-             JOIN players p
-               ON p.id=c.player_id
-             WHERE c.channel=$1
-             ORDER BY c.created_at DESC
-             LIMIT 100`,
-            [channel]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            messages:
-                result.rows.reverse()
-        }
-    );
-}
-
-async function sendChat(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const channel =
-        String(
-            body.channel ||
-            "global"
-        ).slice(0, 50);
-
-    const message =
-        String(
-            body.message ||
-            ""
-        ).trim();
-
-    if (!message) {
-        return error(
-            res,
-            400,
-            "Message is empty"
-        );
-    }
-
-    if (message.length > 1000) {
-        return error(
-            res,
-            400,
-            "Message too long"
-        );
-    }
-
-    const result =
-        await query(
-            `INSERT INTO chat
-             (player_id,channel,message)
-             VALUES ($1,$2,$3)
-             RETURNING *`,
-            [
-                player.id,
-                channel,
-                message
-            ]
-        );
-
-    return send(
-        res,
-        201,
-        {
-            ok: true,
-            message:
-                result.rows[0]
-        }
-    );
+    rows.sort((a, b) => b.netWorth - a.netWorth);
+
+    return json(res, 200, {
+        success: true,
+        rankings: rows.map((r, i) => ({
+            rank: i + 1,
+            ...r
+        }))
+    });
 }
 
 /* =========================================================
    LOANS
 ========================================================= */
 
-async function loans(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT *
-             FROM loans
-             WHERE player_id=$1
-             ORDER BY created_at DESC`,
-            [player.id]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            loans:
-                result.rows.map(
-                    x => ({
-                        id: Number(x.id),
-                        amount:
-                            Number(x.amount),
-                        remaining:
-                            Number(x.remaining),
-                        interest:
-                            Number(x.interest),
-                        createdAt:
-                            x.created_at
-                    })
-                )
-        }
+async function loans(req, res, player) {
+    const result = await query(
+        `
+        SELECT *
+        FROM loans
+        WHERE player_id=$1
+        ORDER BY created_at DESC
+        `,
+        [player.id]
     );
+
+    return json(res, 200, {
+        success: true,
+        loans: result.rows
+    });
 }
 
-async function takeLoan(
-    req,
-    res,
-    player,
-    body
-) {
+async function takeLoan(req, res, player) {
+    const b = await body(req);
+    const amount = Math.floor(num(b.amount || b.principal));
 
-    const amount =
-        money(body.amount);
-
-    if (
-        amount <= 0 ||
-        amount > 1000000000
-    ) {
-        return error(
-            res,
-            400,
-            "Invalid loan amount"
-        );
+    if (amount < 10000) {
+        return error(res, 400, 'Minimum loan is 10,000');
     }
 
-    const interest =
-        0.05;
+    if (amount > 1000000000) {
+        return error(res, 400, 'Maximum loan is 1,000,000,000');
+    }
 
-    await transaction(
-        async client => {
-
-            await client.query(
-                `INSERT INTO loans
-                 (
-                    player_id,
-                    amount,
-                    remaining,
-                    interest
-                 )
-                 VALUES ($1,$2,$2,$3)`,
-                [
-                    player.id,
-                    amount,
-                    interest
-                ]
-            );
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash+$1
-                 WHERE id=$2`,
-                [
-                    amount,
-                    player.id
-                ]
-            );
-        }
+    const outstanding = await query(
+        `
+        SELECT COALESCE(SUM(remaining),0) AS remaining
+        FROM loans
+        WHERE player_id=$1
+        `,
+        [player.id]
     );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            amount,
-            interest
-        }
+    const limit = Math.max(
+        100000,
+        num(player.cash) * Math.max(2, num(player.level))
     );
+
+    if (num(outstanding.rows[0].remaining) + amount > limit) {
+        return error(res, 400, 'Loan limit exceeded');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash+$1
+            WHERE id=$2
+            `,
+            [amount, player.id]
+        );
+
+        await client.query(
+            `
+            INSERT INTO loans
+            (id,player_id,principal,remaining,interest_rate,due_at)
+            VALUES($1,$2,$3,$3,0.10,NOW()+INTERVAL '30 days')
+            `,
+            [id(), player.id, amount]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        amount,
+        player: await playerSummary(player.id)
+    });
+}
+
+/* =========================================================
+   CONTRACTS
+========================================================= */
+
+async function contracts(req, res) {
+    await query(
+        `
+        UPDATE contracts
+        SET status='expired'
+        WHERE ends_at IS NOT NULL
+          AND ends_at<NOW()
+          AND status='open'
+        `
+    );
+
+    const result = await query(
+        `
+        SELECT *
+        FROM contracts
+        WHERE status='open'
+        ORDER BY reward ASC
+        `
+    );
+
+    return json(res, 200, {
+        success: true,
+        contracts: result.rows
+    });
+}
+
+async function runningContracts(req, res, player) {
+    const result = await query(
+        `
+        SELECT
+            rc.*,
+            c.title,
+            c.description
+        FROM running_contracts rc
+        JOIN contracts c ON c.id=rc.contract_id
+        WHERE rc.player_id=$1
+        ORDER BY rc.started_at DESC
+        `,
+        [player.id]
+    );
+
+    for (const rc of result.rows) {
+        if (
+            rc.status === 'running' &&
+            new Date(rc.ends_at).getTime() <= Date.now()
+        ) {
+            await completeRunningContract(rc);
+        }
+    }
+
+    const fresh = await query(
+        `
+        SELECT
+            rc.*,
+            c.title,
+            c.description
+        FROM running_contracts rc
+        JOIN contracts c ON c.id=rc.contract_id
+        WHERE rc.player_id=$1
+        ORDER BY rc.started_at DESC
+        `,
+        [player.id]
+    );
+
+    return json(res, 200, {
+        success: true,
+        contracts: fresh.rows
+    });
+}
+
+async function completeRunningContract(rc) {
+    const result = await query(
+        `
+        UPDATE running_contracts
+        SET status='completed'
+        WHERE id=$1 AND status='running'
+        RETURNING *
+        `,
+        [rc.id]
+    );
+
+    if (!result.rows.length) return;
+
+    await query(
+        `
+        UPDATE players
+        SET cash=cash+$1,total_income=total_income+$1,xp=xp+$2
+        WHERE id=$2
+        `,
+        [
+            num(rc.reward),
+            rc.player_id,
+            Math.max(10, Math.floor(num(rc.reward) / 1000))
+        ]
+    );
+
+    await updateLevel(rc.player_id);
+}
+
+async function bidContract(req, res, player) {
+    const b = await body(req);
+
+    const contractId = String(
+        b.contractId || b.id || ''
+    );
+
+    const amount = Math.floor(
+        num(b.amount || b.bid || b.bidAmount)
+    );
+
+    const contractResult = await query(
+        `
+        SELECT *
+        FROM contracts
+        WHERE id=$1 AND status='open'
+        `,
+        [contractId]
+    );
+
+    if (!contractResult.rows.length) {
+        return error(res, 404, 'Contract not available');
+    }
+
+    const c = contractResult.rows[0];
+
+    if (num(player.level) < num(c.min_level)) {
+        return error(res, 400, `Level ${c.min_level} required`);
+    }
+
+    if (amount <= 0) {
+        return error(res, 400, 'Invalid bid');
+    }
+
+    await query(
+        `
+        INSERT INTO contract_bids
+        (id,contract_id,player_id,amount)
+        VALUES($1,$2,$3,$4)
+        ON CONFLICT(contract_id,player_id)
+        DO UPDATE SET amount=EXCLUDED.amount,created_at=NOW()
+        `,
+        [id(), contractId, player.id, amount]
+    );
+
+    return json(res, 200, {
+        success: true,
+        message: 'Bid submitted'
+    });
+}
+
+async function contractBidRanking(req, res) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const contractId = url.searchParams.get('contractId');
+
+    if (!contractId) {
+        return json(res, 200, {
+            success: true,
+            bids: []
+        });
+    }
+
+    const result = await query(
+        `
+        SELECT
+            cb.amount,
+            cb.created_at,
+            p.username,
+            p.company_name
+        FROM contract_bids cb
+        JOIN players p ON p.id=cb.player_id
+        WHERE cb.contract_id=$1
+        ORDER BY cb.amount ASC,cb.created_at ASC
+        LIMIT 50
+        `,
+        [contractId]
+    );
+
+    return json(res, 200, {
+        success: true,
+        bids: result.rows
+    });
+}
+
+/* =========================================================
+   ALLIANCES
+========================================================= */
+
+async function alliances(req, res) {
+    const result = await query(
+        `
+        SELECT
+            a.id,
+            a.name,
+            a.leader_id,
+            a.created_at,
+            COUNT(am.player_id)::int AS members
+        FROM alliances a
+        LEFT JOIN alliance_members am ON am.alliance_id=a.id
+        GROUP BY a.id
+        ORDER BY members DESC,a.created_at ASC
+        `
+    );
+
+    return json(res, 200, {
+        success: true,
+        alliances: result.rows
+    });
+}
+
+async function createAlliance(req, res, player) {
+    const b = await body(req);
+    const name = safeName(b.name || b.allianceName, '');
+
+    if (!name || name.length < 3) {
+        return error(res, 400, 'Alliance name is required');
+    }
+
+    const existing = await query(
+        `SELECT id FROM alliances WHERE LOWER(name)=LOWER($1)`,
+        [name]
+    );
+
+    if (existing.rows.length) {
+        return error(res, 409, 'Alliance already exists');
+    }
+
+    const allianceId = id();
+
+    await transaction(async client => {
+        await client.query(
+            `
+            INSERT INTO alliances(id,name,leader_id)
+            VALUES($1,$2,$3)
+            `,
+            [allianceId, name, player.id]
+        );
+
+        await client.query(
+            `
+            INSERT INTO alliance_members(alliance_id,player_id,role)
+            VALUES($1,$2,'leader')
+            `,
+            [allianceId, player.id]
+        );
+    });
+
+    return json(res, 201, {
+        success: true,
+        allianceId,
+        name
+    });
+}
+
+/* =========================================================
+   CHAT
+========================================================= */
+
+async function getChat(req, res) {
+    const result = await query(
+        `
+        SELECT
+            c.id,
+            c.message,
+            c.created_at,
+            p.username,
+            p.company_name
+        FROM chat c
+        JOIN players p ON p.id=c.player_id
+        ORDER BY c.created_at DESC
+        LIMIT 100
+        `
+    );
+
+    return json(res, 200, {
+        success: true,
+        messages: result.rows.reverse()
+    });
+}
+
+async function sendChat(req, res, player) {
+    const b = await body(req);
+    const message = String(b.message || '').trim();
+
+    if (!message) {
+        return error(res, 400, 'Message is empty');
+    }
+
+    if (message.length > 500) {
+        return error(res, 400, 'Message is too long');
+    }
+
+    await query(
+        `
+        INSERT INTO chat(id,player_id,message)
+        VALUES($1,$2,$3)
+        `,
+        [id(), player.id, message]
+    );
+
+    return json(res, 201, {
+        success: true
+    });
+}
+
+/* =========================================================
+   ARMY / WARS
+========================================================= */
+
+async function army(req, res, player) {
+    await query(
+        `
+        INSERT INTO army(player_id)
+        VALUES($1)
+        ON CONFLICT(player_id) DO NOTHING
+        `,
+        [player.id]
+    );
+
+    const result = await query(
+        `SELECT * FROM army WHERE player_id=$1`,
+        [player.id]
+    );
+
+    const a = result.rows[0];
+
+    const militaryPower =
+        num(a.ground_level) * 100 +
+        num(a.air_level) * 150 +
+        num(a.defense_level) * 120 +
+        num(a.offensive_level) * 130;
+
+    return json(res, 200, {
+        success: true,
+        army: {
+            ...a,
+            militaryPower,
+            military_power: militaryPower
+        }
+    });
+}
+
+async function upgradeArmy(req, res, player) {
+    const b = await body(req);
+
+    const type = String(
+        b.type || b.unit || b.category || 'ground'
+    ).toLowerCase();
+
+    const allowed = [
+        'ground',
+        'air',
+        'defense',
+        'offensive'
+    ];
+
+    if (!allowed.includes(type)) {
+        return error(res, 400, 'Invalid army upgrade');
+    }
+
+    await query(
+        `
+        INSERT INTO army(player_id)
+        VALUES($1)
+        ON CONFLICT(player_id) DO NOTHING
+        `,
+        [player.id]
+    );
+
+    const armyResult = await query(
+        `SELECT * FROM army WHERE player_id=$1`,
+        [player.id]
+    );
+
+    const current = num(
+        armyResult.rows[0][`${type}_level`]
+    );
+
+    const cost =
+        Math.round(50000 * Math.pow(current, 1.7));
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
+        );
+
+        await client.query(
+            `
+            UPDATE army
+            SET ${type}_level=${type}_level+1
+            WHERE player_id=$1
+            `,
+            [player.id]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        type,
+        cost,
+        player: await playerSummary(player.id)
+    });
+}
+
+async function wars(req, res, player) {
+    const b = await body(req);
+
+    const targetId = String(
+        b.targetPlayerId || b.targetId || b.defenderId || ''
+    );
+
+    if (!targetId || targetId === player.id) {
+        return error(res, 400, 'Invalid target');
+    }
+
+    const target = await query(
+        `SELECT id,username,company_name FROM players WHERE id=$1`,
+        [targetId]
+    );
+
+    if (!target.rows.length) {
+        return error(res, 404, 'Target player not found');
+    }
+
+    const attackerArmy = await query(
+        `SELECT * FROM army WHERE player_id=$1`,
+        [player.id]
+    );
+
+    const defenderArmy = await query(
+        `SELECT * FROM army WHERE player_id=$1`,
+        [targetId]
+    );
+
+    const a = attackerArmy.rows[0] || {};
+    const d = defenderArmy.rows[0] || {};
+
+    const attackerPower =
+        num(a.ground_level, 1) * 100 +
+        num(a.air_level, 1) * 150 +
+        num(a.defense_level, 1) * 120 +
+        num(a.offensive_level, 1) * 130;
+
+    const defenderPower =
+        num(d.ground_level, 1) * 100 +
+        num(d.air_level, 1) * 150 +
+        num(d.defense_level, 1) * 120 +
+        num(d.offensive_level, 1) * 130;
+
+    const attackerRoll =
+        attackerPower * (0.85 + Math.random() * 0.30);
+
+    const defenderRoll =
+        defenderPower * (0.85 + Math.random() * 0.30);
+
+    const resultText =
+        attackerRoll >= defenderRoll ? 'attacker_win' : 'defender_win';
+
+    await query(
+        `
+        INSERT INTO wars
+        (id,attacker_id,defender_id,attacker_power,defender_power,result)
+        VALUES($1,$2,$3,$4,$5,$6)
+        `,
+        [
+            id(),
+            player.id,
+            targetId,
+            Math.round(attackerPower),
+            Math.round(defenderPower),
+            resultText
+        ]
+    );
+
+    return json(res, 200, {
+        success: true,
+        result: resultText,
+        attackerPower: Math.round(attackerPower),
+        defenderPower: Math.round(defenderPower),
+        target: target.rows[0]
+    });
 }
 
 /* =========================================================
    COUNTRY RELATIONS
 ========================================================= */
 
-const COUNTRIES = [
-    "India",
-    "United States",
-    "Canada",
-    "Brazil",
-    "Mexico",
-    "United Kingdom",
-    "Germany",
-    "France",
-    "China",
-    "Japan",
-    "Australia",
-    "Indonesia",
-    "Saudi Arabia",
-    "South Africa",
-    "Chile"
-];
-
-async function countryRelations(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT *
-             FROM country_relations
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    const map =
-        new Map(
-            result.rows.map(
-                x => [
-                    x.country,
-                    Number(x.relation)
-                ]
-            )
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            relations:
-                COUNTRIES.map(
-                    country => ({
-                        country,
-                        relation:
-                            map.has(country)
-                                ? map.get(country)
-                                : 50
-                    })
-                )
-        }
+async function countryRelations(req, res, player) {
+    const result = await query(
+        `
+        SELECT
+            cr.country_id,
+            cr.relation,
+            cr.trade_bonus
+        FROM country_relations cr
+        WHERE cr.player_id=$1
+        ORDER BY cr.relation DESC
+        `,
+        [player.id]
     );
+
+    const rows = result.rows.map(r => ({
+        ...r,
+        country: COUNTRIES.find(c => c.id === r.country_id) || null
+    }));
+
+    return json(res, 200, {
+        success: true,
+        relations: rows
+    });
 }
 
-async function improveCountryRelation(
-    req,
-    res,
-    player,
-    body
-) {
+async function improveCountryRelation(req, res, player) {
+    const b = await body(req);
+    const countryId = String(b.countryId || b.country || '');
 
-    const country =
-        String(
-            body.country ||
-            ""
-        ).trim();
-
-    if (
-        !COUNTRIES.includes(country)
-    ) {
-        return error(
-            res,
-            400,
-            "Invalid country"
-        );
+    if (!COUNTRIES.some(c => c.id === countryId)) {
+        return error(res, 404, 'Country not found');
     }
 
-    const cost =
-        10000;
+    const current = await query(
+        `
+        SELECT relation
+        FROM country_relations
+        WHERE player_id=$1 AND country_id=$2
+        `,
+        [player.id, countryId]
+    );
 
-    if (
-        Number(player.cash) <
+    const relation = num(current.rows[0]?.relation);
+
+    if (relation >= 100) {
+        return error(res, 400, 'Relations are already maximum');
+    }
+
+    const cost = 100000 + relation * 10000;
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    const newRelation = clamp(relation + 10, 0, 100);
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
+        );
+
+        await client.query(
+            `
+            INSERT INTO country_relations
+            (player_id,country_id,relation,trade_bonus)
+            VALUES($1,$2,$3,$4)
+            ON CONFLICT(player_id,country_id)
+            DO UPDATE SET
+                relation=EXCLUDED.relation,
+                trade_bonus=EXCLUDED.trade_bonus
+            `,
+            [
+                player.id,
+                countryId,
+                newRelation,
+                newRelation / 1000
+            ]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        countryId,
+        relation: newRelation,
         cost
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash"
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1
-                 WHERE id=$2`,
-                [
-                    cost,
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO country_relations
-                 (
-                    player_id,
-                    country,
-                    relation
-                 )
-                 VALUES ($1,$2,55)
-                 ON CONFLICT(player_id,country)
-                 DO UPDATE SET
-                    relation =
-                    LEAST(
-                        100,
-                        country_relations.relation+5
-                    ),
-                    updated_at=NOW()`,
-                [
-                    player.id,
-                    country
-                ]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            country
-        }
-    );
+    });
 }
 
 /* =========================================================
    MARKETING
 ========================================================= */
 
-async function marketing(
-    req,
-    res,
-    player
-) {
+async function marketing(req, res, player) {
+    await query(
+        `
+        INSERT INTO marketing_stats(player_id)
+        VALUES($1)
+        ON CONFLICT(player_id) DO NOTHING
+        `,
+        [player.id]
+    );
 
-    const result =
-        await query(
-            `SELECT *
-             FROM marketing_campaigns
-             WHERE player_id=$1
-               AND ends_at>NOW()
-             ORDER BY ends_at`,
+    const stats = await query(
+        `SELECT * FROM marketing_stats WHERE player_id=$1`,
+        [player.id]
+    );
+
+    const campaigns = await query(
+        `
+        SELECT *
+        FROM media_campaigns
+        WHERE player_id=$1
+        ORDER BY created_at DESC
+        LIMIT 20
+        `,
+        [player.id]
+    );
+
+    return json(res, 200, {
+        success: true,
+        stats: stats.rows[0],
+        campaigns: campaigns.rows
+    });
+}
+
+async function marketingCampaign(req, res, player) {
+    const b = await body(req);
+
+    const name = safeName(
+        b.name || b.campaign || 'Media Campaign',
+        'Media Campaign'
+    );
+
+    const cost = Math.max(
+        10000,
+        Math.floor(num(b.cost, 100000))
+    );
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    const bonus = Math.min(
+        0.50,
+        cost / 10000000
+    );
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
+        );
+
+        await client.query(
+            `
+            INSERT INTO media_campaigns
+            (id,player_id,name,cost,bonus,ends_at)
+            VALUES($1,$2,$3,$4,$5,NOW()+INTERVAL '7 days')
+            `,
+            [id(), player.id, name, cost, bonus]
+        );
+
+        await client.query(
+            `
+            INSERT INTO marketing_stats(player_id)
+            VALUES($1)
+            ON CONFLICT DO NOTHING
+            `,
             [player.id]
         );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            campaigns:
-                result.rows
-        }
-    );
-}
-
-async function createMarketingCampaign(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const type =
-        String(
-            body.type ||
-            body.campaignType ||
-            "standard"
+        await client.query(
+            `
+            UPDATE marketing_stats
+            SET campaigns=campaigns+1,
+                reputation=LEAST(100,reputation+5),
+                brand_level=LEAST(20,brand_level+1)
+            WHERE player_id=$1
+            `,
+            [player.id]
         );
+    });
 
-    const configs = {
-        standard: {
-            cost: 5000,
-            hours: 1,
-            multiplier: 1.10
-        },
-
-        premium: {
-            cost: 25000,
-            hours: 3,
-            multiplier: 1.25
-        },
-
-        global: {
-            cost: 100000,
-            hours: 6,
-            multiplier: 1.50
-        }
-    };
-
-    const config =
-        configs[type];
-
-    if (!config) {
-        return error(
-            res,
-            400,
-            "Invalid campaign"
-        );
-    }
-
-    if (
-        Number(player.cash) <
-        config.cost
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash"
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1
-                 WHERE id=$2`,
-                [
-                    config.cost,
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO marketing_campaigns
-                 (
-                    player_id,
-                    campaign_type,
-                    cost,
-                    duration_hours,
-                    multiplier,
-                    starts_at,
-                    ends_at
-                 )
-                 VALUES
-                 (
-                    $1,$2,$3,$4,$5,
-                    NOW(),
-                    NOW()+($4 || ' hours')::interval
-                 )`,
-                [
-                    player.id,
-                    type,
-                    config.cost,
-                    config.hours,
-                    config.multiplier
-                ]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            campaign: config
-        }
-    );
+    return json(res, 200, {
+        success: true,
+        message: 'Marketing campaign launched',
+        bonus
+    });
 }
 
 /* =========================================================
    BUSINESS CENTER
 ========================================================= */
 
-async function businessCenter(
-    req,
-    res,
-    player
-) {
-
-    const assets =
-        await query(
-            `SELECT category,
-                    SUM(quantity)::bigint AS quantity
-             FROM player_assets
-             WHERE player_id=$1
-             GROUP BY category`,
-            [player.id]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            company: {
-                name:
-                    player.company_name,
-                level:
-                    Number(player.level),
-                cash:
-                    Number(player.cash),
-                netWorth:
-                    Number(player.net_worth)
-            },
-            assets:
-                assets.rows
-        }
+async function businessCenter(req, res, player) {
+    const assets = await query(
+        `
+        SELECT category,SUM(quantity)::int AS quantity
+        FROM player_assets
+        WHERE player_id=$1
+        GROUP BY category
+        ORDER BY category
+        `,
+        [player.id]
     );
+
+    const income = await currentIncome(player.id);
+    const netWorth = await playerNetWorth(player.id);
+
+    return json(res, 200, {
+        success: true,
+        company: {
+            name: player.company_name,
+            country: player.country_id,
+            level: player.level,
+            cash: num(player.cash),
+            netWorth,
+            income
+        },
+        assets: assets.rows
+    });
 }
 
 /* =========================================================
    CHALLENGES
 ========================================================= */
 
-const CHALLENGES = [
-    {
-        id: "first_million",
-        name: "First Million",
-        target: 1000000,
-        reward: 50000
-    },
+async function challenges(req, res, player) {
+    const netWorth = await playerNetWorth(player.id);
 
-    {
-        id: "ten_million",
-        name: "Ten Million",
-        target: 10000000,
-        reward: 250000
-    },
+    const assetCountResult = await query(
+        `
+        SELECT COALESCE(SUM(quantity),0)::int AS count
+        FROM player_assets
+        WHERE player_id=$1
+        `,
+        [player.id]
+    );
 
-    {
-        id: "hundred_million",
-        name: "Hundred Million",
-        target: 100000000,
-        reward: 2000000
-    },
+    const assetCount = num(assetCountResult.rows[0].count);
 
-    {
-        id: "asset_empire",
-        name: "Asset Empire",
-        target: 100,
-        reward: 500000
-    }
-];
+    const progressMap = {};
 
-async function challenges(
-    req,
-    res,
-    player
-) {
-
-    const output =
-        [];
-
-    for (
-        const challenge of CHALLENGES
-    ) {
-
+    for (const c of CHALLENGES) {
         let progress = 0;
 
         if (
-            challenge.id ===
-            "first_million"
+            c.id === 'first_million' ||
+            c.id === 'ten_million' ||
+            c.id === 'hundred_million'
         ) {
-            progress =
-                Number(player.net_worth);
+            progress = netWorth;
+        } else if (c.id === 'asset_empire') {
+            progress = assetCount;
         }
 
-        if (
-            challenge.id ===
-            "ten_million"
-        ) {
-            progress =
-                Number(player.net_worth);
-        }
+        const completed = progress >= c.requirement;
 
-        if (
-            challenge.id ===
-            "hundred_million"
-        ) {
-            progress =
-                Number(player.net_worth);
-        }
+        await query(
+            `
+            INSERT INTO business_challenges
+            (player_id,challenge_id,progress,completed)
+            VALUES($1,$2,$3,$4)
+            ON CONFLICT(player_id,challenge_id)
+            DO UPDATE SET
+                progress=EXCLUDED.progress,
+                completed=EXCLUDED.completed
+            `,
+            [player.id, c.id, progress, completed]
+        );
 
-        if (
-            challenge.id ===
-            "asset_empire"
-        ) {
-
-            const result =
-                await query(
-                    `SELECT COALESCE(
-                        SUM(quantity),0
-                     ) AS total
-                     FROM player_assets
-                     WHERE player_id=$1`,
-                    [player.id]
-                );
-
-            progress =
-                Number(
-                    result.rows[0].total
-                );
-        }
-
-        const claimed =
-            await query(
-                `SELECT 1
-                 FROM challenge_claims
-                 WHERE player_id=$1
-                   AND challenge_id=$2`,
-                [
-                    player.id,
-                    challenge.id
-                ]
-            );
-
-        output.push({
-            ...challenge,
+        progressMap[c.id] = {
+            ...c,
             progress,
-            completed:
-                progress >= challenge.target,
-            claimed:
-                claimed.rows.length > 0
-        });
+            completed
+        };
     }
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            challenges: output
-        }
+    const db = await query(
+        `
+        SELECT challenge_id,claimed
+        FROM business_challenges
+        WHERE player_id=$1
+        `,
+        [player.id]
     );
+
+    for (const r of db.rows) {
+        if (progressMap[r.challenge_id]) {
+            progressMap[r.challenge_id].claimed = r.claimed;
+        }
+    }
+
+    return json(res, 200, {
+        success: true,
+        challenges: Object.values(progressMap)
+    });
 }
 
-async function claimChallenge(
-    req,
-    res,
-    player,
-    body
-) {
+async function claimChallenge(req, res, player) {
+    const b = await body(req);
+    const challengeId = String(b.challengeId || b.id || '');
 
-    const id =
-        String(
-            body.challengeId ||
-            body.id ||
-            ""
-        );
+    const c = CHALLENGES.find(x => x.id === challengeId);
 
-    const challenge =
-        CHALLENGES.find(
-            x => x.id === id
-        );
-
-    if (!challenge) {
-        return error(
-            res,
-            404,
-            "Challenge not found"
-        );
+    if (!c) {
+        return error(res, 404, 'Challenge not found');
     }
 
-    const already =
-        await query(
-            `SELECT 1
-             FROM challenge_claims
-             WHERE player_id=$1
-               AND challenge_id=$2`,
-            [
-                player.id,
-                id
-            ]
-        );
+    await challenges(req, {
+        writeHead() {},
+        end() {}
+    }, player);
 
-    if (already.rows.length) {
-        return error(
-            res,
-            400,
-            "Challenge already claimed"
-        );
-    }
-
-    let progress = 0;
-
-    if (
-        id === "first_million" ||
-        id === "ten_million" ||
-        id === "hundred_million"
-    ) {
-        progress =
-            Number(player.net_worth);
-    }
-
-    if (id === "asset_empire") {
-
-        const result =
-            await query(
-                `SELECT COALESCE(
-                    SUM(quantity),0
-                 ) AS total
-                 FROM player_assets
-                 WHERE player_id=$1`,
-                [player.id]
-            );
-
-        progress =
-            Number(result.rows[0].total);
-    }
-
-    if (
-        progress <
-        challenge.target
-    ) {
-        return error(
-            res,
-            400,
-            "Challenge not completed"
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `INSERT INTO challenge_claims
-                 (player_id,challenge_id)
-                 VALUES ($1,$2)`,
-                [
-                    player.id,
-                    id
-                ]
-            );
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash+$1,
-                     xp=xp+500
-                 WHERE id=$2`,
-                [
-                    challenge.reward,
-                    player.id
-                ]
-            );
-        }
+    const result = await query(
+        `
+        SELECT completed,claimed
+        FROM business_challenges
+        WHERE player_id=$1 AND challenge_id=$2
+        `,
+        [player.id, challengeId]
     );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            reward:
-                challenge.reward
-        }
-    );
+    if (!result.rows.length || !result.rows[0].completed) {
+        return error(res, 400, 'Challenge is not completed');
+    }
+
+    if (result.rows[0].claimed) {
+        return error(res, 400, 'Reward already claimed');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE business_challenges
+            SET claimed=TRUE
+            WHERE player_id=$1 AND challenge_id=$2
+            `,
+            [player.id, challengeId]
+        );
+
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash+$1,total_income=total_income+$1
+            WHERE id=$2
+            `,
+            [c.reward, player.id]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        reward: c.reward,
+        player: await playerSummary(player.id)
+    });
 }
 
 /* =========================================================
-   CEO
+   CEO UPGRADES
 ========================================================= */
 
-const CEO_UPGRADES = [
-    {
-        id: "leadership",
-        name: "Leadership",
-        baseCost: 10000
-    },
-
-    {
-        id: "negotiation",
-        name: "Negotiation",
-        baseCost: 12000
-    },
-
-    {
-        id: "management",
-        name: "Management",
-        baseCost: 15000
-    },
-
-    {
-        id: "strategy",
-        name: "Strategy",
-        baseCost: 20000
-    },
-
-    {
-        id: "innovation",
-        name: "Innovation",
-        baseCost: 25000
-    }
-];
-
-async function ceo(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT *
-             FROM ceo_upgrades
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    const levels =
-        new Map(
-            result.rows.map(
-                x => [
-                    x.upgrade_id,
-                    Number(x.level)
-                ]
-            )
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            level:
-                Number(player.level),
-            upgrades:
-                CEO_UPGRADES.map(
-                    x => {
-
-                        const level =
-                            levels.get(x.id) ||
-                            0;
-
-                        return {
-                            ...x,
-                            level,
-                            nextCost:
-                                x.baseCost *
-                                Math.pow(
-                                    2,
-                                    level
-                                )
-                        };
-                    }
-                )
-        }
+async function ceo(req, res, player) {
+    const result = await query(
+        `
+        SELECT upgrade_id,level
+        FROM ceo_upgrades
+        WHERE player_id=$1
+        `,
+        [player.id]
     );
+
+    const map = {};
+
+    for (const r of result.rows) {
+        map[r.upgrade_id] = num(r.level);
+    }
+
+    const upgrades = CEO_UPGRADES.map(u => ({
+        ...u,
+        level: map[u.id] || 0,
+        nextCost:
+            u.baseCost *
+            Math.pow(2, map[u.id] || 0)
+    }));
+
+    return json(res, 200, {
+        success: true,
+        upgrades
+    });
 }
 
-async function upgradeCEO(
-    req,
-    res,
-    player,
-    body
-) {
+async function upgradeCeo(req, res, player) {
+    const b = await body(req);
+    const upgradeId = String(b.upgradeId || b.id || '');
 
-    const id =
-        String(
-            body.upgradeId ||
-            body.id ||
-            ""
-        );
+    const u = CEO_UPGRADES.find(x => x.id === upgradeId);
 
-    const upgrade =
-        CEO_UPGRADES.find(
-            x => x.id === id
-        );
-
-    if (!upgrade) {
-        return error(
-            res,
-            404,
-            "CEO upgrade not found"
-        );
+    if (!u) {
+        return error(res, 404, 'CEO upgrade not found');
     }
 
-    const existing =
-        await query(
-            `SELECT level
-             FROM ceo_upgrades
-             WHERE player_id=$1
-               AND upgrade_id=$2`,
-            [
-                player.id,
-                id
-            ]
+    const result = await query(
+        `
+        SELECT level
+        FROM ceo_upgrades
+        WHERE player_id=$1 AND upgrade_id=$2
+        `,
+        [player.id, upgradeId]
+    );
+
+    const current = num(result.rows[0]?.level);
+
+    if (current >= u.max) {
+        return error(res, 400, 'Upgrade is already at maximum');
+    }
+
+    const cost = u.baseCost * Math.pow(2, current);
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
         );
 
-    const level =
-        existing.rows.length
-            ? Number(existing.rows[0].level)
-            : 0;
-
-    const cost =
-        upgrade.baseCost *
-        Math.pow(
-            2,
-            level
+        await client.query(
+            `
+            INSERT INTO ceo_upgrades(player_id,upgrade_id,level)
+            VALUES($1,$2,$3)
+            ON CONFLICT(player_id,upgrade_id)
+            DO UPDATE SET level=EXCLUDED.level
+            `,
+            [player.id, upgradeId, current + 1]
         );
+    });
 
-    if (
-        Number(player.cash) <
+    return json(res, 200, {
+        success: true,
+        upgradeId,
+        level: current + 1,
         cost
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash"
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1
-                 WHERE id=$2`,
-                [
-                    cost,
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO ceo_upgrades
-                 (
-                    player_id,
-                    upgrade_id,
-                    level
-                 )
-                 VALUES ($1,$2,1)
-                 ON CONFLICT(player_id,upgrade_id)
-                 DO UPDATE SET
-                    level =
-                    ceo_upgrades.level+1`,
-                [
-                    player.id,
-                    id
-                ]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            upgrade: id,
-            newLevel: level + 1,
-            cost
-        }
-    );
+    });
 }
 
 /* =========================================================
@@ -5908,2676 +2623,1747 @@ async function upgradeCEO(
 
 const COLLECTIONS = [
     {
-        id: "transport_collection",
-        name: "Transport Collection",
-        items: [
-            "taxi",
-            "bus",
-            "train",
-            "vip_limousines",
-            "passenger_plane",
-            "cargo_plane"
-        ],
-        reward: 100000
+        id: 'transport_collection',
+        name: 'Transport Collection',
+        category: 'transportation',
+        count: 5,
+        reward: 500000
     },
-
     {
-        id: "business_collection",
-        name: "Business Collection",
-        items: [
-            "pub",
-            "dance_club",
-            "coffee_shop",
-            "restaurant",
-            "movie_theater",
-            "clothes_shop",
-            "supermarket",
-            "fast_food"
-        ],
-        reward: 150000
+        id: 'business_collection',
+        name: 'Business Collection',
+        category: 'businesses',
+        count: 5,
+        reward: 1000000
     },
-
     {
-        id: "world_collection",
-        name: "World Collection",
-        items: [],
-        reward: 250000
+        id: 'world_collection',
+        name: 'World Collection',
+        category: 'resources',
+        count: 3,
+        reward: 5000000
     }
 ];
 
-async function collections(
-    req,
-    res,
-    player
-) {
-
+async function collections(req, res, player) {
     const output = [];
 
-    for (
-        const collection of COLLECTIONS
-    ) {
+    for (const c of COLLECTIONS) {
+        let count = 0;
 
-        let completed = true;
-
-        for (
-            const itemId
-            of collection.items
-        ) {
-
-            const result =
-                await query(
-                    `SELECT quantity
-                     FROM player_assets
-                     WHERE player_id=$1
-                       AND item_id=$2
-                       AND quantity>0`,
-                    [
-                        player.id,
-                        itemId
-                    ]
-                );
-
-            if (!result.rows.length) {
-                completed = false;
-                break;
-            }
-        }
-
-        const claimed =
-            await query(
-                `SELECT 1
-                 FROM collection_claims
-                 WHERE player_id=$1
-                   AND collection_id=$2`,
-                [
-                    player.id,
-                    collection.id
-                ]
+        if (c.id === 'world_collection') {
+            const r = await query(
+                `
+                SELECT COUNT(*)::int AS count
+                FROM world_sites
+                WHERE owner_id=$1
+                `,
+                [player.id]
             );
 
+            count = num(r.rows[0].count);
+        } else {
+            const r = await query(
+                `
+                SELECT COALESCE(SUM(quantity),0)::int AS count
+                FROM player_assets
+                WHERE player_id=$1 AND category=$2
+                `,
+                [player.id, c.category]
+            );
+
+            count = num(r.rows[0].count);
+        }
+
+        const claimed = await query(
+            `
+            SELECT claimed
+            FROM collections
+            WHERE player_id=$1 AND collection_id=$2
+            `,
+            [player.id, c.id]
+        );
+
         output.push({
-            ...collection,
-            completed,
-            claimed:
-                claimed.rows.length > 0
+            ...c,
+            progress: count,
+            completed: count >= c.count,
+            claimed: claimed.rows[0]?.claimed || false
         });
     }
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            collections: output
-        }
-    );
+    return json(res, 200, {
+        success: true,
+        collections: output
+    });
 }
 
-async function claimCollection(
-    req,
-    res,
-    player,
-    body
-) {
+async function claimCollection(req, res, player) {
+    const b = await body(req);
+    const collectionId = String(b.collectionId || b.id || '');
 
-    const id =
-        String(
-            body.collectionId ||
-            body.id ||
-            ""
-        );
+    const c = COLLECTIONS.find(x => x.id === collectionId);
 
-    const collection =
-        COLLECTIONS.find(
-            x => x.id === id
-        );
-
-    if (!collection) {
-        return error(
-            res,
-            404,
-            "Collection not found"
-        );
+    if (!c) {
+        return error(res, 404, 'Collection not found');
     }
 
-    const already =
-        await query(
-            `SELECT 1
-             FROM collection_claims
-             WHERE player_id=$1
-               AND collection_id=$2`,
-            [
-                player.id,
-                id
-            ]
-        );
-
-    if (already.rows.length) {
-        return error(
-            res,
-            400,
-            "Collection already claimed"
-        );
-    }
-
-    for (
-        const itemId
-        of collection.items
-    ) {
-
-        const result =
-            await query(
-                `SELECT quantity
-                 FROM player_assets
-                 WHERE player_id=$1
-                   AND item_id=$2
-                   AND quantity>0`,
-                [
-                    player.id,
-                    itemId
-                ]
-            );
-
-        if (!result.rows.length) {
-            return error(
-                res,
-                400,
-                "Collection incomplete"
-            );
-        }
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `INSERT INTO collection_claims
-                 (player_id,collection_id)
-                 VALUES ($1,$2)`,
-                [
-                    player.id,
-                    id
-                ]
-            );
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash+$1,
-                     xp=xp+1000
-                 WHERE id=$2`,
-                [
-                    collection.reward,
-                    player.id
-                ]
-            );
-        }
+    const result = await query(
+        `
+        SELECT claimed
+        FROM collections
+        WHERE player_id=$1 AND collection_id=$2
+        `,
+        [player.id, collectionId]
     );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            reward:
-                collection.reward
-        }
-    );
+    if (result.rows[0]?.claimed) {
+        return error(res, 400, 'Collection reward already claimed');
+    }
+
+    let count = 0;
+
+    if (c.id === 'world_collection') {
+        const r = await query(
+            `
+            SELECT COUNT(*)::int AS count
+            FROM world_sites
+            WHERE owner_id=$1
+            `,
+            [player.id]
+        );
+
+        count = num(r.rows[0].count);
+    } else {
+        const r = await query(
+            `
+            SELECT COALESCE(SUM(quantity),0)::int AS count
+            FROM player_assets
+            WHERE player_id=$1 AND category=$2
+            `,
+            [player.id, c.category]
+        );
+
+        count = num(r.rows[0].count);
+    }
+
+    if (count < c.count) {
+        return error(res, 400, 'Collection is not completed');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            INSERT INTO collections(player_id,collection_id,claimed)
+            VALUES($1,$2,TRUE)
+            ON CONFLICT(player_id,collection_id)
+            DO UPDATE SET claimed=TRUE
+            `,
+            [player.id, collectionId]
+        );
+
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash+$1,total_income=total_income+$1
+            WHERE id=$2
+            `,
+            [c.reward, player.id]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        reward: c.reward
+    });
 }
 
 /* =========================================================
    SPECIAL ITEMS
 ========================================================= */
 
-async function specialItems(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT
-                si.id,
-                si.name,
-                si.price,
-                COALESCE(
-                    psi.quantity,
-                    0
-                ) AS quantity
-             FROM special_items si
-             LEFT JOIN player_special_items psi
-               ON psi.item_id=si.id
-              AND psi.player_id=$1`,
-            [player.id]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            items:
-                result.rows.map(
-                    x => ({
-                        id: x.id,
-                        name: x.name,
-                        price:
-                            Number(x.price),
-                        quantity:
-                            Number(x.quantity)
-                    })
-                )
-        }
+async function specialItems(req, res, player) {
+    const owned = await query(
+        `
+        SELECT item_id,quantity
+        FROM special_items
+        WHERE player_id=$1
+        `,
+        [player.id]
     );
+
+    const map = {};
+
+    for (const x of owned.rows) {
+        map[x.item_id] = num(x.quantity);
+    }
+
+    return json(res, 200, {
+        success: true,
+        items: SPECIAL_ITEMS.map(x => ({
+            ...x,
+            owned: map[x.id] || 0
+        }))
+    });
 }
 
-async function buySpecialItem(
-    req,
-    res,
-    player,
-    body
-) {
+async function buySpecialItem(req, res, player) {
+    const b = await body(req);
+    const itemId = String(b.itemId || b.id || '');
 
-    const id =
-        String(
-            body.itemId ||
-            body.id ||
-            ""
-        );
+    const item = SPECIAL_ITEMS.find(x => x.id === itemId);
 
-    const result =
-        await query(
-            `SELECT *
-             FROM special_items
-             WHERE id=$1`,
-            [id]
-        );
-
-    if (!result.rows.length) {
-        return error(
-            res,
-            404,
-            "Special item not found"
-        );
+    if (!item) {
+        return error(res, 404, 'Special item not found');
     }
 
-    const itemData =
-        result.rows[0];
-
-    if (
-        Number(player.gold_coins) <
-        Number(itemData.price)
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough gold coins"
-        );
+    if (num(player.cash) < item.price) {
+        return error(res, 400, 'Not enough cash');
     }
 
-    await transaction(
-        async client => {
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [item.price, player.id]
+        );
 
-            await client.query(
-                `UPDATE players
-                 SET gold_coins=
-                     gold_coins-$1
-                 WHERE id=$2`,
-                [
-                    itemData.price,
-                    player.id
-                ]
-            );
+        await client.query(
+            `
+            INSERT INTO special_items(player_id,item_id,quantity)
+            VALUES($1,$2,1)
+            ON CONFLICT(player_id,item_id)
+            DO UPDATE SET quantity=special_items.quantity+1
+            `,
+            [player.id, itemId]
+        );
+    });
 
-            await client.query(
-                `INSERT INTO player_special_items
-                 (player_id,item_id,quantity)
-                 VALUES ($1,$2,1)
-                 ON CONFLICT(player_id,item_id)
-                 DO UPDATE SET
-                    quantity =
-                    player_special_items.quantity+1`,
-                [
-                    player.id,
-                    id
-                ]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            item: itemData
-        }
-    );
+    return json(res, 200, {
+        success: true,
+        item,
+        player: await playerSummary(player.id)
+    });
 }
 
 /* =========================================================
    STOCK MARKET
 ========================================================= */
 
-async function currentStockPrice(
-    stockId
-) {
-
-    const result =
-        await query(
-            `SELECT price
-             FROM stock_prices
-             WHERE stock_id=$1`,
-            [stockId]
-        );
-
-    if (result.rows.length) {
-        return Number(
-            result.rows[0].price
-        );
-    }
-
-    const stock =
-        STOCK_MARKET.find(
-            x => x.id === stockId
-        );
-
-    if (
-        stock &&
-        stock.price != null
-    ) {
-        await query(
-            `INSERT INTO stock_prices
-             (stock_id,price)
-             VALUES ($1,$2)
-             ON CONFLICT DO NOTHING`,
-            [
-                stockId,
-                stock.price
-            ]
-        );
-
-        return Number(
-            stock.price
-        );
-    }
-
-    return null;
-}
-
-async function stockMarket(
-    req,
-    res,
-    player
-) {
-
-    const output = [];
-
-    for (
-        const stock
-        of STOCK_MARKET
-    ) {
-
-        const price =
-            await currentStockPrice(
-                stock.id
-            );
-
-        const position =
-            await query(
-                `SELECT *
-                 FROM stock_positions
-                 WHERE player_id=$1
-                   AND stock_id=$2`,
-                [
-                    player.id,
-                    stock.id
-                ]
-            );
-
-        output.push({
-            ...stock,
-            price,
-            quantity:
-                position.rows.length
-                    ? Number(
-                        position.rows[0].quantity
-                    )
-                    : 0
-        });
-    }
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            stocks: output
-        }
+async function updateStockPrices() {
+    const stocks = await query(
+        `SELECT symbol,price,updated_at FROM stocks`
     );
-}
 
-async function buyStock(
-    req,
-    res,
-    player,
-    body
-) {
+    for (const s of stocks.rows) {
+        const updated = new Date(s.updated_at).getTime();
 
-    const stockId =
-        String(
-            body.stockId ||
-            body.id ||
-            ""
-        );
+        if (Date.now() - updated < 10 * 60 * 1000) {
+            continue;
+        }
 
-    const quantity =
-        Math.max(
+        const current = num(s.price);
+
+        const change =
+            0.97 + Math.random() * 0.06;
+
+        const next = clamp(
+            current * change,
             1,
-            Math.floor(
-                Number(
-                    body.quantity || 1
-                )
-            )
+            1000000
         );
 
-    const stock =
-        STOCK_MARKET.find(
-            x => x.id === stockId
-        );
-
-    if (!stock) {
-        return error(
-            res,
-            404,
-            "Stock not found"
+        await query(
+            `
+            UPDATE stocks
+            SET price=$1,updated_at=NOW()
+            WHERE symbol=$2
+            `,
+            [next, s.symbol]
         );
     }
-
-    const price =
-        await currentStockPrice(
-            stockId
-        );
-
-    if (price == null) {
-        return error(
-            res,
-            400,
-            "Stock price unavailable"
-        );
-    }
-
-    const total =
-        price * quantity;
-
-    if (
-        Number(player.cash) <
-        total
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash"
-        );
-    }
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1
-                 WHERE id=$2`,
-                [
-                    total,
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO stock_positions
-                 (
-                    player_id,
-                    stock_id,
-                    quantity,
-                    average_price
-                 )
-                 VALUES ($1,$2,$3,$4)
-                 ON CONFLICT(player_id,stock_id)
-                 DO UPDATE SET
-                    average_price =
-                    (
-                        (
-                            stock_positions.average_price *
-                            stock_positions.quantity
-                        ) +
-                        (
-                            EXCLUDED.average_price *
-                            EXCLUDED.quantity
-                        )
-                    ) /
-                    (
-                        stock_positions.quantity +
-                        EXCLUDED.quantity
-                    ),
-                    quantity =
-                    stock_positions.quantity +
-                    EXCLUDED.quantity`,
-                [
-                    player.id,
-                    stockId,
-                    quantity,
-                    price
-                ]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            stockId,
-            quantity,
-            price,
-            total
-        }
-    );
 }
 
-async function sellStock(
-    req,
-    res,
-    player,
-    body
-) {
+async function stockMarket(req, res, player) {
+    await updateStockPrices();
 
-    const stockId =
-        String(
-            body.stockId ||
-            body.id ||
-            ""
+    const stocks = await query(
+        `
+        SELECT *
+        FROM stocks
+        ORDER BY symbol
+        `
+    );
+
+    const owned = await query(
+        `
+        SELECT symbol,quantity,average_price
+        FROM player_stocks
+        WHERE player_id=$1
+        `,
+        [player.id]
+    );
+
+    const map = {};
+
+    for (const s of owned.rows) {
+        map[s.symbol] = s;
+    }
+
+    return json(res, 200, {
+        success: true,
+        stocks: stocks.rows.map(s => ({
+            ...s,
+            owned: map[s.symbol]?.quantity || 0,
+            averagePrice: map[s.symbol]?.average_price || 0
+        }))
+    });
+}
+
+async function buyStock(req, res, player) {
+    const b = await body(req);
+
+    const symbol = String(b.symbol || '').toUpperCase();
+    const quantity = Math.floor(num(b.quantity, 0));
+
+    if (quantity < 1) {
+        return error(res, 400, 'Invalid quantity');
+    }
+
+    const result = await query(
+        `SELECT * FROM stocks WHERE symbol=$1`,
+        [symbol]
+    );
+
+    if (!result.rows.length) {
+        return error(res, 404, 'Stock not found');
+    }
+
+    const stock = result.rows[0];
+    const cost = Math.round(num(stock.price) * quantity);
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    const existing = await query(
+        `
+        SELECT quantity,average_price
+        FROM player_stocks
+        WHERE player_id=$1 AND symbol=$2
+        `,
+        [player.id, symbol]
+    );
+
+    const oldQty = num(existing.rows[0]?.quantity);
+    const oldAverage = num(existing.rows[0]?.average_price);
+
+    const newQty = oldQty + quantity;
+
+    const newAverage =
+        newQty === 0
+            ? 0
+            : (
+                (oldQty * oldAverage) +
+                (quantity * num(stock.price))
+            ) / newQty;
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
         );
 
-    const quantity =
-        Math.max(
-            1,
-            Math.floor(
-                Number(
-                    body.quantity || 1
-                )
-            )
-        );
-
-    const position =
-        await query(
-            `SELECT *
-             FROM stock_positions
-             WHERE player_id=$1
-               AND stock_id=$2`,
+        await client.query(
+            `
+            INSERT INTO player_stocks
+            (player_id,symbol,quantity,average_price)
+            VALUES($1,$2,$3,$4)
+            ON CONFLICT(player_id,symbol)
+            DO UPDATE SET
+                quantity=EXCLUDED.quantity,
+                average_price=EXCLUDED.average_price
+            `,
             [
                 player.id,
-                stockId
+                symbol,
+                newQty,
+                newAverage
             ]
         );
+    });
 
-    if (!position.rows.length) {
-        return error(
-            res,
-            400,
-            "No stock owned"
-        );
+    return json(res, 200, {
+        success: true,
+        symbol,
+        quantity,
+        cost
+    });
+}
+
+async function sellStock(req, res, player) {
+    const b = await body(req);
+
+    const symbol = String(b.symbol || '').toUpperCase();
+    const quantity = Math.floor(num(b.quantity, 0));
+
+    if (quantity < 1) {
+        return error(res, 400, 'Invalid quantity');
     }
 
-    if (
-        Number(position.rows[0].quantity) <
-        quantity
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough stock"
-        );
+    const stock = await query(
+        `SELECT * FROM stocks WHERE symbol=$1`,
+        [symbol]
+    );
+
+    if (!stock.rows.length) {
+        return error(res, 404, 'Stock not found');
     }
 
-    const price =
-        await currentStockPrice(
-            stockId
+    const holding = await query(
+        `
+        SELECT quantity
+        FROM player_stocks
+        WHERE player_id=$1 AND symbol=$2
+        `,
+        [player.id, symbol]
+    );
+
+    const owned = num(holding.rows[0]?.quantity);
+
+    if (owned < quantity) {
+        return error(res, 400, 'Not enough shares');
+    }
+
+    const proceeds =
+        Math.round(num(stock.rows[0].price) * quantity);
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash+$1,total_income=total_income+$1
+            WHERE id=$2
+            `,
+            [proceeds, player.id]
         );
 
-    const total =
-        Number(price) *
-        quantity;
+        await client.query(
+            `
+            UPDATE player_stocks
+            SET quantity=quantity-$1
+            WHERE player_id=$2 AND symbol=$3
+            `,
+            [quantity, player.id, symbol]
+        );
+    });
 
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE stock_positions
-                 SET quantity=quantity-$1
-                 WHERE player_id=$2
-                   AND stock_id=$3`,
-                [
-                    quantity,
-                    player.id,
-                    stockId
-                ]
-            );
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash+$1
-                 WHERE id=$2`,
-                [
-                    total,
-                    player.id
-                ]
-            );
-        }
-    );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            stockId,
-            quantity,
-            price,
-            received: total
-        }
-    );
+    return json(res, 200, {
+        success: true,
+        symbol,
+        quantity,
+        proceeds
+    });
 }
 
 /* =========================================================
    PRODUCTION
 ========================================================= */
 
-async function production(
-    req,
-    res,
-    player
-) {
+async function production(req, res, player) {
+    await completeProduction(player.id);
 
-    const orders =
-        await query(
-            `SELECT *
-             FROM production_orders
-             WHERE player_id=$1
-             ORDER BY completes_at`,
-            [player.id]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-
-            productionTech:
-                Number(player.production_tech),
-
-            technology:
-                PRODUCTION_TECH,
-
-            orders:
-                orders.rows
-        }
+    const result = await query(
+        `
+        SELECT *
+        FROM production_orders
+        WHERE player_id=$1
+        ORDER BY started_at DESC
+        LIMIT 100
+        `,
+        [player.id]
     );
+
+    return json(res, 200, {
+        success: true,
+        orders: result.rows
+    });
 }
 
-async function productionOrder(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const productId =
-        String(
-            body.productId ||
-            body.itemId ||
-            ""
-        );
-
-    const quantity =
-        Math.max(
-            1,
-            Math.floor(
-                Number(
-                    body.quantity || 1
-                )
-            )
-        );
-
-    const product =
-        PRODUCTION_TECH.find(
-            x => x.id === productId
-        );
-
-    if (!product) {
-        return error(
-            res,
-            404,
-            "Production product not found"
-        );
-    }
-
-    if (
-        Number(player.production_tech) <
-        Number(product.productionTech)
-    ) {
-        return error(
-            res,
-            403,
-            `Require production tech level ${product.productionTech}`
-        );
-    }
-
-    if (product.price == null) {
-        return error(
-            res,
-            400,
-            "Product price unavailable"
-        );
-    }
-
-    const cost =
-        Number(product.price) *
-        quantity;
-
-    if (
-        Number(player.cash) <
-        cost
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash"
-        );
-    }
-
-    const minutes =
-        Math.max(
-            1,
-            Math.ceil(
-                quantity * 2
-            )
-        );
-
-    await transaction(
-        async client => {
-
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1
-                 WHERE id=$2`,
-                [
-                    cost,
-                    player.id
-                ]
-            );
-
-            await client.query(
-                `INSERT INTO production_orders
-                 (
-                    player_id,
-                    product_id,
-                    quantity,
-                    cost,
-                    completes_at
-                 )
-                 VALUES
-                 (
-                    $1,$2,$3,$4,
-                    NOW()+($5 || ' minutes')::interval
-                 )`,
-                [
-                    player.id,
-                    productId,
-                    quantity,
-                    cost,
-                    minutes
-                ]
-            );
-        }
+async function completeProduction(playerId) {
+    const result = await query(
+        `
+        SELECT *
+        FROM production_orders
+        WHERE player_id=$1
+          AND status='running'
+          AND ends_at<=NOW()
+        `,
+        [playerId]
     );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            product,
-            quantity,
-            cost,
-            minutes
-        }
-    );
-}
-
-/* =========================================================
-   COMPLETE PRODUCTION
-========================================================= */
-
-async function completeProduction(
-    req,
-    res,
-    player,
-    body
-) {
-
-    const orderId =
-        Number(
-            body.orderId ||
-            body.id
+    for (const order of result.rows) {
+        const updated = await query(
+            `
+            UPDATE production_orders
+            SET status='completed'
+            WHERE id=$1 AND status='running'
+            RETURNING *
+            `,
+            [order.id]
         );
 
-    const result =
+        if (!updated.rows.length) continue;
+
         await query(
-            `SELECT *
-             FROM production_orders
-             WHERE id=$1
-               AND player_id=$2
-               AND completed=FALSE
-               AND completes_at<=NOW()`,
+            `
+            UPDATE players
+            SET cash=cash+$1,total_income=total_income+$1,xp=xp+$2
+            WHERE id=$3
+            `,
             [
-                orderId,
-                player.id
+                num(order.reward),
+                Math.max(1, Math.floor(num(order.reward) / 1000)),
+                playerId
             ]
         );
-
-    if (!result.rows.length) {
-        return error(
-            res,
-            400,
-            "Production order is not ready"
-        );
     }
 
-    const order =
-        result.rows[0];
+    await updateLevel(playerId);
+}
 
-    await transaction(
-        async client => {
+async function productionOrder(req, res, player) {
+    const b = await body(req);
 
-            await client.query(
-                `UPDATE production_orders
-                 SET completed=TRUE
-                 WHERE id=$1`,
-                [orderId]
-            );
-
-            await client.query(
-                `INSERT INTO player_assets
-                 (
-                    player_id,
-                    item_id,
-                    category,
-                    quantity
-                 )
-                 VALUES ($1,$2,'product',$3)
-                 ON CONFLICT
-                    (player_id,item_id,category)
-                 DO UPDATE SET
-                    quantity =
-                    player_assets.quantity+
-                    EXCLUDED.quantity,
-                    updated_at=NOW()`,
-                [
-                    player.id,
-                    order.product_id,
-                    order.quantity
-                ]
-            );
-        }
+    const product = safeName(
+        b.product || b.name || 'Manufactured Goods',
+        'Manufactured Goods'
     );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            orderId
-        }
+    const quantity = clamp(
+        Math.floor(num(b.quantity, 1)),
+        1,
+        100000
     );
+
+    const costPerUnit = Math.max(
+        100,
+        Math.floor(num(b.costPerUnit, 1000))
+    );
+
+    const rewardPerUnit = Math.max(
+        costPerUnit + 100,
+        Math.floor(num(b.rewardPerUnit, costPerUnit * 1.25))
+    );
+
+    const cost = costPerUnit * quantity;
+    const reward = rewardPerUnit * quantity;
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    const durationMinutes =
+        Math.max(5, Math.min(1440, quantity));
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
+        );
+
+        await client.query(
+            `
+            INSERT INTO production_orders
+            (id,player_id,product,quantity,cost,reward,ends_at)
+            VALUES
+            ($1,$2,$3,$4,$5,$6,NOW()+($7 * INTERVAL '1 minute'))
+            `,
+            [
+                id(),
+                player.id,
+                product,
+                quantity,
+                cost,
+                reward,
+                durationMinutes
+            ]
+        );
+    });
+
+    return json(res, 201, {
+        success: true,
+        product,
+        quantity,
+        cost,
+        reward,
+        durationMinutes
+    });
 }
 
 /* =========================================================
    SPACE
 ========================================================= */
 
-async function space(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT *
-             FROM space_program
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    if (!result.rows.length) {
-
-        await query(
-            `INSERT INTO space_program
-             (player_id)
-             VALUES ($1)
-             ON CONFLICT DO NOTHING`,
-            [player.id]
-        );
-    }
-
-    const current =
-        await query(
-            `SELECT *
-             FROM space_program
-             WHERE player_id=$1`,
-            [player.id]
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            space:
-                current.rows[0]
-        }
+async function space(req, res, player) {
+    await query(
+        `
+        INSERT INTO space_program(player_id)
+        VALUES($1)
+        ON CONFLICT(player_id) DO NOTHING
+        `,
+        [player.id]
     );
+
+    const result = await query(
+        `
+        SELECT *
+        FROM space_program
+        WHERE player_id=$1
+        `,
+        [player.id]
+    );
+
+    const p = result.rows[0];
+
+    return json(res, 200, {
+        success: true,
+        program: p,
+        levels: SPACE_LEVELS
+    });
 }
 
-async function upgradeSpace(
-    req,
-    res,
-    player
-) {
+async function spaceUpgrade(req, res, player) {
+    await query(
+        `
+        INSERT INTO space_program(player_id)
+        VALUES($1)
+        ON CONFLICT(player_id) DO NOTHING
+        `,
+        [player.id]
+    );
 
-    const result =
-        await query(
-            `SELECT *
-             FROM space_program
-             WHERE player_id=$1`,
-            [player.id]
-        );
+    const result = await query(
+        `
+        SELECT *
+        FROM space_program
+        WHERE player_id=$1
+        `,
+        [player.id]
+    );
 
-    const current =
-        result.rows[0] || {
-            level: 0
-        };
+    const current = num(result.rows[0].level);
 
-    const level =
-        Number(current.level);
-
-    const cost =
-        100000 *
-        Math.pow(
-            5,
-            level
-        );
-
-    if (
-        Number(player.cash) <
-        cost
-    ) {
-        return error(
-            res,
-            400,
-            "Not enough cash",
-            { cost }
-        );
+    if (current >= SPACE_LEVELS.length) {
+        return error(res, 400, 'Space program is at maximum level');
     }
 
-    await transaction(
-        async client => {
+    const next = SPACE_LEVELS[current];
+    const cost = next.cost;
 
-            await client.query(
-                `UPDATE players
-                 SET cash=cash-$1
-                 WHERE id=$2`,
-                [
-                    cost,
-                    player.id
-                ]
-            );
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
 
-            await client.query(
-                `INSERT INTO space_program
-                 (
-                    player_id,
-                    level
-                 )
-                 VALUES ($1,1)
-                 ON CONFLICT(player_id)
-                 DO UPDATE SET
-                    level =
-                    space_program.level+1,
-                    updated_at=NOW()`,
-                [
-                    player.id
-                ]
-            );
-        }
-    );
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
+        );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            level: level + 1,
-            cost
-        }
-    );
+        await client.query(
+            `
+            UPDATE space_program
+            SET level=level+1,
+                research=research+$2
+            WHERE player_id=$1
+            `,
+            [player.id, current * 100]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        newLevel: current + 1,
+        cost
+    });
 }
 
 /* =========================================================
    CONGRESS
 ========================================================= */
 
-async function congress(
-    req,
-    res,
-    player
-) {
-
-    const result =
-        await query(
-            `SELECT
-                r.*,
-                COUNT(v.player_id)::int
-                    AS votes
-             FROM congress_resolutions r
-             LEFT JOIN congress_votes v
-               ON v.resolution_id=r.id
-             WHERE r.active=TRUE
-             GROUP BY r.id
-             ORDER BY r.created_at DESC`
-        );
-
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            resolutions:
-                result.rows.map(
-                    x => ({
-                        id: Number(x.id),
-                        title: x.title,
-                        description:
-                            x.description,
-                        yesVotes:
-                            Number(x.yes_votes),
-                        noVotes:
-                            Number(x.no_votes),
-                        votes:
-                            Number(x.votes),
-                        active:
-                            x.active
-                    })
-                )
-        }
+async function congress(req, res) {
+    const result = await query(
+        `
+        SELECT
+            r.id,
+            r.creator_id,
+            r.title,
+            r.description,
+            r.yes_votes,
+            r.no_votes,
+            r.active,
+            r.created_at,
+            p.username AS creator
+        FROM congress_resolutions r
+        JOIN players p ON p.id=r.creator_id
+        WHERE r.active=TRUE
+        ORDER BY r.created_at DESC
+        LIMIT 50
+        `
     );
+
+    return json(res, 200, {
+        success: true,
+        resolutions: result.rows
+    });
 }
 
-async function createResolution(
-    req,
-    res,
-    player,
-    body
-) {
+async function createResolution(req, res, player) {
+    const b = await body(req);
 
-    if (
-        Number(player.level) <
-        10
-    ) {
-        return error(
-            res,
-            403,
-            "Require level 10"
-        );
-    }
+    const title = safeName(
+        b.title || b.name,
+        ''
+    );
 
-    const title =
-        String(
-            body.title ||
-            ""
-        ).trim();
-
-    const description =
-        String(
-            body.description ||
-            ""
-        ).trim();
+    const description = String(
+        b.description || ''
+    ).substring(0, 1000);
 
     if (!title) {
-        return error(
-            res,
-            400,
-            "Title required"
-        );
+        return error(res, 400, 'Resolution title is required');
     }
 
-    const result =
-        await query(
-            `INSERT INTO congress_resolutions
-             (
-                creator_id,
-                title,
-                description
-             )
-             VALUES ($1,$2,$3)
-             RETURNING *`,
-            [
-                player.id,
-                title,
-                description
-            ]
-        );
+    const resolutionId = id();
 
-    return send(
-        res,
-        201,
-        {
-            ok: true,
-            resolution:
-                result.rows[0]
-        }
+    await query(
+        `
+        INSERT INTO congress_resolutions
+        (id,creator_id,title,description)
+        VALUES($1,$2,$3,$4)
+        `,
+        [
+            resolutionId,
+            player.id,
+            title,
+            description
+        ]
     );
+
+    return json(res, 201, {
+        success: true,
+        resolutionId
+    });
 }
 
-async function voteCongress(
-    req,
-    res,
-    player,
-    body
-) {
+async function voteResolution(req, res, player) {
+    const b = await body(req);
 
-    const resolutionId =
-        Number(
-            body.resolutionId ||
-            body.id
-        );
+    const resolutionId = String(
+        b.resolutionId || b.id || ''
+    );
 
     const vote =
-        Boolean(body.vote);
+        b.vote === true ||
+        b.vote === 'true' ||
+        b.vote === 'yes';
 
-    const result =
-        await query(
-            `SELECT *
-             FROM congress_resolutions
-             WHERE id=$1
-               AND active=TRUE`,
-            [resolutionId]
-        );
+    const resolution = await query(
+        `
+        SELECT *
+        FROM congress_resolutions
+        WHERE id=$1 AND active=TRUE
+        `,
+        [resolutionId]
+    );
 
-    if (!result.rows.length) {
-        return error(
-            res,
-            404,
-            "Resolution not found"
-        );
+    if (!resolution.rows.length) {
+        return error(res, 404, 'Resolution not found');
     }
 
-    const existing =
-        await query(
-            `SELECT 1
-             FROM congress_votes
-             WHERE resolution_id=$1
-               AND player_id=$2`,
-            [
-                resolutionId,
-                player.id
-            ]
-        );
+    const existing = await query(
+        `
+        SELECT *
+        FROM congress_votes
+        WHERE resolution_id=$1 AND player_id=$2
+        `,
+        [resolutionId, player.id]
+    );
 
     if (existing.rows.length) {
-        return error(
-            res,
-            400,
-            "Already voted"
-        );
+        return error(res, 400, 'You already voted');
     }
 
-    await transaction(
-        async client => {
+    await transaction(async client => {
+        await client.query(
+            `
+            INSERT INTO congress_votes
+            (resolution_id,player_id,vote)
+            VALUES($1,$2,$3)
+            `,
+            [resolutionId, player.id, vote]
+        );
 
+        if (vote) {
             await client.query(
-                `INSERT INTO congress_votes
-                 (
-                    resolution_id,
-                    player_id,
-                    vote
-                 )
-                 VALUES ($1,$2,$3)`,
-                [
-                    resolutionId,
-                    player.id,
-                    vote
-                ]
+                `
+                UPDATE congress_resolutions
+                SET yes_votes=yes_votes+1
+                WHERE id=$1
+                `,
+                [resolutionId]
             );
-
-            if (vote) {
-
-                await client.query(
-                    `UPDATE congress_resolutions
-                     SET yes_votes=yes_votes+1
-                     WHERE id=$1`,
-                    [resolutionId]
-                );
-
-            } else {
-
-                await client.query(
-                    `UPDATE congress_resolutions
-                     SET no_votes=no_votes+1
-                     WHERE id=$1`,
-                    [resolutionId]
-                );
-            }
+        } else {
+            await client.query(
+                `
+                UPDATE congress_resolutions
+                SET no_votes=no_votes+1
+                WHERE id=$1
+                `,
+                [resolutionId]
+            );
         }
+    });
+
+    return json(res, 200, {
+        success: true,
+        vote
+    });
+}
+
+/* =========================================================
+   RESEARCH
+========================================================= */
+
+async function research(req, res, player) {
+    await query(
+        `
+        INSERT INTO research(player_id)
+        VALUES($1)
+        ON CONFLICT(player_id) DO NOTHING
+        `,
+        [player.id]
     );
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            vote
-        }
+    const result = await query(
+        `
+        SELECT *
+        FROM research
+        WHERE player_id=$1
+        `,
+        [player.id]
     );
+
+    return json(res, 200, {
+        success: true,
+        research: result.rows[0]
+    });
+}
+
+async function researchUpgrade(req, res, player) {
+    await query(
+        `
+        INSERT INTO research(player_id)
+        VALUES($1)
+        ON CONFLICT(player_id) DO NOTHING
+        `,
+        [player.id]
+    );
+
+    const result = await query(
+        `SELECT * FROM research WHERE player_id=$1`,
+        [player.id]
+    );
+
+    const r = result.rows[0];
+    const nextLevel = num(r.technology_level) + 1;
+    const cost = nextLevel * 250000;
+
+    if (num(player.cash) < cost) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [cost, player.id]
+        );
+
+        await client.query(
+            `
+            UPDATE research
+            SET technology_level=technology_level+1,
+                research_points=research_points+$2
+            WHERE player_id=$1
+            `,
+            [player.id, nextLevel * 100]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        technologyLevel: nextLevel,
+        cost
+    });
 }
 
 /* =========================================================
    MISSIONS
 ========================================================= */
 
-const MISSIONS = [
-    {
-        id: "business_challenge",
-        name: "5 answers Business Challenge",
-        target: 5,
-        reward: 2
-    },
+async function missions(req, res, player) {
+    const missionList = [
+        {
+            id: 'mission_buy_business',
+            name: 'First Business',
+            description: 'Own at least one business.',
+            target: 1,
+            reward: 25000
+        },
+        {
+            id: 'mission_buy_transport',
+            name: 'Start Transportation',
+            description: 'Own at least one transportation asset.',
+            target: 1,
+            reward: 50000
+        },
+        {
+            id: 'mission_world_site',
+            name: 'Enter Resource Industry',
+            description: 'Own a world resource site.',
+            target: 1,
+            reward: 250000
+        }
+    ];
 
-    {
-        id: "trade_challenges",
-        name: 'Complete 2 "trade challenges"',
-        target: 2,
-        reward: 2
-    },
+    const output = [];
 
-    {
-        id: "daily_trades",
-        name: "Complete 5 daily trades",
-        target: 5,
-        reward: 2
-    },
+    for (const m of missionList) {
+        let progress = 0;
 
-    {
-        id: "join_alliance",
-        name: "Join an alliance",
-        target: 1,
-        reward: 2
-    },
-
-    {
-        id: "upgrade",
-        name: "Perform an upgrade",
-        target: 1,
-        reward: 2
-    },
-
-    {
-        id: "private_messages",
-        name: "Send 5 private messages",
-        target: 5,
-        reward: 2
-    },
-
-    {
-        id: "mine_diamonds",
-        name: "Mine 400 Diamonds",
-        target: 400,
-        reward: 2
-    }
-];
-
-async function missions(
-    req,
-    res,
-    player
-) {
-
-    const result = [];
-
-    for (
-        const mission
-        of MISSIONS
-    ) {
-
-        const row =
-            await query(
-                `SELECT *
-                 FROM missions
-                 WHERE player_id=$1
-                   AND mission_id=$2`,
-                [
-                    player.id,
-                    mission.id
-                ]
+        if (m.id === 'mission_buy_business') {
+            const r = await query(
+                `
+                SELECT COALESCE(SUM(quantity),0)::int AS count
+                FROM player_assets
+                WHERE player_id=$1 AND category='businesses'
+                `,
+                [player.id]
             );
 
-        if (!row.rows.length) {
-
-            await query(
-                `INSERT INTO missions
-                 (
-                    player_id,
-                    mission_id,
-                    progress,
-                    target
-                 )
-                 VALUES ($1,$2,0,$3)
-                 ON CONFLICT DO NOTHING`,
-                [
-                    player.id,
-                    mission.id,
-                    mission.target
-                ]
-            );
+            progress = num(r.rows[0].count);
         }
 
-        const current =
-            await query(
-                `SELECT *
-                 FROM missions
-                 WHERE player_id=$1
-                   AND mission_id=$2`,
-                [
-                    player.id,
-                    mission.id
-                ]
+        if (m.id === 'mission_buy_transport') {
+            const r = await query(
+                `
+                SELECT COALESCE(SUM(quantity),0)::int AS count
+                FROM player_assets
+                WHERE player_id=$1 AND category='transportation'
+                `,
+                [player.id]
             );
 
-        const data =
-            current.rows[0];
+            progress = num(r.rows[0].count);
+        }
 
-        result.push({
-            ...mission,
-            progress:
-                Number(data.progress),
-            completed:
-                Number(data.progress) >=
-                Number(data.target),
-            claimed:
-                Boolean(data.claimed)
+        if (m.id === 'mission_world_site') {
+            const r = await query(
+                `
+                SELECT COUNT(*)::int AS count
+                FROM world_sites
+                WHERE owner_id=$1
+                `,
+                [player.id]
+            );
+
+            progress = num(r.rows[0].count);
+        }
+
+        output.push({
+            ...m,
+            progress,
+            completed: progress >= m.target
         });
     }
 
-    return send(
-        res,
-        200,
-        {
-            ok: true,
-            missions: result
-        }
+    return json(res, 200, {
+        success: true,
+        missions: output
+    });
+}
+
+/* =========================================================
+   MEGA PROJECTS
+========================================================= */
+
+async function megaProjects(req, res, player) {
+    const result = await query(
+        `
+        SELECT *
+        FROM mega_projects
+        WHERE player_id=$1
+        ORDER BY id
+        `,
+        [player.id]
     );
+
+    return json(res, 200, {
+        success: true,
+        projects: result.rows
+    });
+}
+
+async function createMegaProject(req, res, player) {
+    const b = await body(req);
+
+    const name = safeName(
+        b.name || 'Mega Project',
+        'Mega Project'
+    );
+
+    const target = Math.max(
+        1000000,
+        Math.floor(num(b.target, 10000000))
+    );
+
+    const projectId = id();
+
+    await query(
+        `
+        INSERT INTO mega_projects
+        (id,player_id,name,target)
+        VALUES($1,$2,$3,$4)
+        `,
+        [projectId, player.id, name, target]
+    );
+
+    return json(res, 201, {
+        success: true,
+        projectId
+    });
+}
+
+async function investMegaProject(req, res, player) {
+    const b = await body(req);
+
+    const projectId = String(
+        b.projectId || b.id || ''
+    );
+
+    const amount = Math.floor(num(b.amount));
+
+    if (amount <= 0) {
+        return error(res, 400, 'Invalid investment');
+    }
+
+    const project = await query(
+        `
+        SELECT *
+        FROM mega_projects
+        WHERE id=$1 AND player_id=$2
+        `,
+        [projectId, player.id]
+    );
+
+    if (!project.rows.length) {
+        return error(res, 404, 'Project not found');
+    }
+
+    if (num(player.cash) < amount) {
+        return error(res, 400, 'Not enough cash');
+    }
+
+    const p = project.rows[0];
+    const newInvested =
+        num(p.invested) + amount;
+
+    await transaction(async client => {
+        await client.query(
+            `
+            UPDATE players
+            SET cash=cash-$1,total_expenses=total_expenses+$1
+            WHERE id=$2
+            `,
+            [amount, player.id]
+        );
+
+        await client.query(
+            `
+            UPDATE mega_projects
+            SET invested=$1,
+                completed=CASE WHEN $1>=target THEN TRUE ELSE completed END
+            WHERE id=$2
+            `,
+            [newInvested, projectId]
+        );
+    });
+
+    return json(res, 200, {
+        success: true,
+        invested: newInvested
+    });
 }
 
 /* =========================================================
-   HEALTH
+   PLAYER PROFILE
 ========================================================= */
 
-async function health(
-    req,
-    res
-) {
+async function getMe(req, res, player) {
+    return json(res, 200, {
+        success: true,
+        player: await playerSummary(player.id)
+    });
+}
 
-    try {
+async function updateProfile(req, res, player) {
+    const b = await body(req);
 
-        await query(
-            "SELECT 1"
-        );
+    const companyName = safeName(
+        b.companyName || b.company,
+        player.company_name
+    );
 
-        return send(
-            res,
-            200,
-            {
-                ok: true,
-                version: VERSION,
-                database: "connected",
-                service:
-                    "Tycoon Empire Multiplayer Server",
-                catalog:
-                    "REFERENCE-PDF-1.0"
-            }
-        );
+    const countryId = String(
+        b.countryId || b.country || player.country_id
+    );
 
-    } catch (err) {
-
-        return send(
-            res,
-            503,
-            {
-                ok: false,
-                version: VERSION,
-                database: "error",
-                message:
-                    err.message
-            }
-        );
+    if (!COUNTRIES.some(c => c.id === countryId)) {
+        return error(res, 400, 'Invalid country');
     }
+
+    await query(
+        `
+        UPDATE players
+        SET company_name=$1,country_id=$2
+        WHERE id=$3
+        `,
+        [companyName, countryId, player.id]
+    );
+
+    return json(res, 200, {
+        success: true,
+        player: await playerSummary(player.id)
+    });
 }
 
 /* =========================================================
-   REQUEST ROUTER
+   ROUTER
 ========================================================= */
 
-async function router(
-    req,
-    res
-) {
+async function route(req, res) {
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+        });
 
-    if (
-        req.method ===
-        "OPTIONS"
-    ) {
-
-        res.writeHead(
-            204,
-            {
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers":
-                    "Content-Type, Authorization",
-                "Access-Control-Allow-Methods":
-                    "GET, POST, PUT, DELETE, OPTIONS"
-            }
-        );
-
-        res.end();
-
-        return;
+        return res.end();
     }
 
-    const parsed =
-        new URL(
-            req.url,
-            `http://${req.headers.host || "localhost"}`
-        );
+    const url = new URL(
+        req.url,
+        `http://${req.headers.host || 'localhost'}`
+    );
 
-    const path =
-        parsed.pathname;
-
-    req.query =
-        parsed.searchParams;
-
-    let body = {};
-
-    if (
-        req.method === "POST" ||
-        req.method === "PUT"
-    ) {
-
-        try {
-            body =
-                await readBody(req);
-        } catch (err) {
-            return error(
-                res,
-                400,
-                err.message
-            );
-        }
-    }
+    const path = url.pathname;
 
     try {
+        /* ---------- PUBLIC ---------- */
 
-        /* -------------------------------------------------
-           HEALTH
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/health"
-        ) {
-            return health(
-                req,
-                res
-            );
+        if (req.method === 'GET' && path === '/') {
+            return json(res, 200, {
+                success: true,
+                name: 'Tycoon Empire Server',
+                version: VERSION,
+                status: 'online'
+            });
         }
 
-        /* -------------------------------------------------
-           ROOT
-        ------------------------------------------------- */
+        if (req.method === 'GET' && path === '/health') {
+            try {
+                await query('SELECT 1');
 
-        if (
-            req.method === "GET" &&
-            path === "/"
-        ) {
-            return send(
-                res,
-                200,
-                {
-                    ok: true,
-                    service:
-                        "Tycoon Empire Multiplayer",
+                return json(res, 200, {
+                    success: true,
+                    status: 'ok',
                     version: VERSION,
-                    database:
-                        "PostgreSQL",
-                    catalog:
-                        "REFERENCE-PDF-1.0"
-                }
-            );
-        }
-
-        /* -------------------------------------------------
-           REGISTER
-        ------------------------------------------------- */
-
-        if (
-            req.method === "POST" &&
-            path === "/api/auth/register"
-        ) {
-            return register(
-                req,
-                res,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           LOGIN
-        ------------------------------------------------- */
-
-        if (
-            req.method === "POST" &&
-            path === "/api/auth/login"
-        ) {
-            return login(
-                req,
-                res,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           AUTHENTICATED ROUTES
-        ------------------------------------------------- */
-
-        const player =
-            await authenticate(req);
-
-        /*
-         * Public ranking endpoint.
-         */
-        if (
-            req.method === "GET" &&
-            (
-                path === "/api/rankings" ||
-                path === "/api/rankings/global"
-            )
-        ) {
-            return rankings(
-                req,
-                res
-            );
-        }
-
-        /*
-         * Everything below this point requires login.
-         */
-        if (!player) {
-            return error(
-                res,
-                401,
-                "Authentication required"
-            );
-        }
-
-        await processIncome(
-            player.id
-        );
-
-        await updateLevel(
-            player.id
-        );
-
-        /* -------------------------------------------------
-           PLAYER
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/players/me"
-        ) {
-
-            return send(
-                res,
-                200,
-                {
-                    ok: true,
-                    player:
-                        await playerSummary(
-                            player.id
-                        )
-                }
-            );
-        }
-
-        /* -------------------------------------------------
-           REFERENCE CATALOG
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/reference/catalog"
-        ) {
-
-            return send(
-                res,
-                200,
-                {
-                    ok: true,
-                    version:
-                        "REFERENCE-PDF-1.0",
-
-                    categories: {
-                        businesses:
-                            BUSINESSES,
-                        transportation:
-                            TRANSPORTATION,
-                        concessions:
-                            CONCESSIONS,
-                        resources:
-                            RESOURCES,
-                        subsidiaries:
-                            SUBSIDIARIES,
-                        research:
-                            RESEARCH,
-                        productionTech:
-                            PRODUCTION_TECH,
-                        products:
-                            PRODUCTS,
-                        properties:
-                            PROPERTIES,
-                        stockMarket:
-                            STOCK_MARKET,
-                        megaProjects:
-                            MEGA_PROJECTS
-                    },
-
-                    levels:
-                        LEVELS
-                }
-            );
-        }
-
-        if (
-            req.method === "GET" &&
-            path === "/api/reference/catalog/player"
-        ) {
-
-            const owned =
-                await query(
-                    `SELECT concession_id
-                     FROM player_concessions
-                     WHERE player_id=$1`,
-                    [player.id]
-                );
-
-            return send(
-                res,
-                200,
-                {
-                    ok: true,
-                    version:
-                        "REFERENCE-PDF-1.0",
-                    items:
-                        catalogForPlayer(
-                            player,
-                            owned.rows
-                        )
-                }
-            );
-        }
-
-        if (
-            req.method === "GET" &&
-            path.startsWith(
-                "/api/reference/catalog/item/"
-            )
-        ) {
-
-            const id =
-                decodeURIComponent(
-                    path.substring(
-                        "/api/reference/catalog/item/"
-                            .length
-                    )
-                );
-
-            const found =
-                catalogById(id);
-
-            if (!found) {
-                return error(
-                    res,
-                    404,
-                    "Item not found"
-                );
+                    database: 'connected'
+                });
+            } catch (e) {
+                return json(res, 503, {
+                    success: false,
+                    status: 'database_error',
+                    version: VERSION,
+                    error: e.message
+                });
             }
-
-            return send(
-                res,
-                200,
-                {
-                    ok: true,
-                    item: found
-                }
-            );
         }
 
-        /* -------------------------------------------------
-           ASSETS
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/assets"
+            req.method === 'POST' &&
+            path === '/api/auth/register'
         ) {
-            return assets(
-                req,
-                res,
-                player
-            );
+            return register(req, res);
         }
 
         if (
-            req.method === "POST" &&
-            path === "/api/assets/buy"
+            req.method === 'POST' &&
+            path === '/api/auth/login'
         ) {
-            return buyAsset(
-                req,
-                res,
-                player,
-                body
-            );
+            return login(req, res);
         }
 
+        /* ---------- AUTHENTICATED ---------- */
+
+        const player = await authPlayer(req);
+
+        if (!player) {
+            return error(res, 401, 'Authentication required');
+        }
+
+        /* ---------- PLAYER ---------- */
+
         if (
-            req.method === "POST" &&
-            path === "/api/assets/sell"
+            req.method === 'GET' &&
+            path === '/api/players/me'
         ) {
-            return sellAsset(
-                req,
-                res,
-                player,
-                body
-            );
+            return getMe(req, res, player);
         }
 
-        /* -------------------------------------------------
-           BUSINESSES
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/businesses"
+            req.method === 'POST' &&
+            path === '/api/players/profile'
         ) {
-
-            return assets(
-                {
-                    ...req,
-                    query:
-                        new URLSearchParams(
-                            "category=business"
-                        )
-                },
-                res,
-                player
-            );
+            return updateProfile(req, res, player);
         }
 
-        /* -------------------------------------------------
-           TRANSPORTATION
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/transportation"
+            req.method === 'GET' &&
+            path === '/api/assets'
         ) {
-
-            return assets(
-                {
-                    ...req,
-                    query:
-                        new URLSearchParams(
-                            "category=transportation"
-                        )
-                },
-                res,
-                player
-            );
+            return assets(req, res, player);
         }
 
-        /* -------------------------------------------------
-           CONCESSIONS
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/concessions"
+            req.method === 'POST' &&
+            path === '/api/assets/buy'
         ) {
-            return concessions(
-                req,
-                res,
-                player
-            );
+            return buy(req, res, player);
+        }
+
+        /* ---------- WORLD ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/world/sites'
+        ) {
+            return worldSites(req, res, player);
         }
 
         if (
-            req.method === "POST" &&
+            req.method === 'POST' &&
+            path === '/api/world/sites/claim'
+        ) {
+            return claimWorldSite(req, res, player);
+        }
+
+        /* ---------- RANKINGS ---------- */
+
+        if (
+            req.method === 'GET' &&
             (
-                path ===
-                "/api/concessions/buy" ||
-                path ===
-                "/api/concessions/purchase"
+                path === '/api/rankings' ||
+                path === '/api/rankings/global'
             )
         ) {
-
-            return buyConcession(
-                req,
-                res,
-                player,
-                body
-            );
+            return rankings(req, res);
         }
 
-        /* -------------------------------------------------
-           RESOURCES
-        ------------------------------------------------- */
+        /* ---------- LOANS ---------- */
 
         if (
-            req.method === "GET" &&
-            path === "/api/resources"
+            req.method === 'GET' &&
+            path === '/api/loans'
         ) {
-
-            return assets(
-                {
-                    ...req,
-                    query:
-                        new URLSearchParams(
-                            "category=resource"
-                        )
-                },
-                res,
-                player
-            );
+            return loans(req, res, player);
         }
 
-        /* -------------------------------------------------
-           SUBSIDIARIES
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/subsidiaries"
+            req.method === 'POST' &&
+            path === '/api/loans/take'
         ) {
-
-            return assets(
-                {
-                    ...req,
-                    query:
-                        new URLSearchParams(
-                            "category=subsidiary"
-                        )
-                },
-                res,
-                player
-            );
+            return takeLoan(req, res, player);
         }
 
-        /* -------------------------------------------------
-           RESEARCH
-        ------------------------------------------------- */
+        /* ---------- CONTRACTS ---------- */
 
         if (
-            req.method === "GET" &&
-            path === "/api/research"
+            req.method === 'GET' &&
+            path === '/api/contracts'
         ) {
-            return research(
-                req,
-                res,
-                player
-            );
+            return contracts(req, res);
         }
 
         if (
-            req.method === "POST" &&
-            path === "/api/research/buy"
+            req.method === 'GET' &&
+            path === '/api/contracts/running'
         ) {
-            return buyResearch(
-                req,
-                res,
-                player,
-                body
-            );
+            return runningContracts(req, res, player);
         }
 
-        /* -------------------------------------------------
-           WORLD
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/world/sites"
+            req.method === 'GET' &&
+            path === '/api/contracts/bids/ranking'
         ) {
-            return worldSites(
-                req,
-                res,
-                player
-            );
+            return contractBidRanking(req, res);
         }
 
         if (
-            req.method === "POST" &&
-            path === "/api/world/sites/claim"
-        ) {
-            return claimWorldSite(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           ARMY
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/army"
-        ) {
-            return army(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
+            req.method === 'POST' &&
             (
-                path ===
-                "/api/army/upgrade" ||
-                path ===
-                "/api/army/update"
+                path === '/api/contracts/bid' ||
+                path === '/api/contracts/bids'
             )
         ) {
-            return armyUpgrade(
-                req,
-                res,
-                player,
-                body
-            );
+            return bidContract(req, res, player);
         }
 
-        /* -------------------------------------------------
-           WARS
-        ------------------------------------------------- */
+        /* ---------- ALLIANCES ---------- */
 
         if (
-            req.method === "POST" &&
-            path === "/api/wars"
+            req.method === 'GET' &&
+            path === '/api/alliances'
         ) {
-            return createWar(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           CONTRACTS
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/contracts"
-        ) {
-            return contracts(
-                req,
-                res
-            );
+            return alliances(req, res);
         }
 
         if (
-            req.method === "GET" &&
-            path === "/api/contracts/running"
-        ) {
-            return runningContracts(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
+            req.method === 'POST' &&
             (
-                path ===
-                "/api/contracts/bid" ||
-                path ===
-                "/api/contracts/bids"
+                path === '/api/alliances' ||
+                path === '/api/alliances/create'
             )
         ) {
-            return placeBid(
-                req,
-                res,
-                player,
-                body
-            );
+            return createAlliance(req, res, player);
         }
 
+        /* ---------- CHAT ---------- */
+
         if (
-            req.method === "GET" &&
-            path ===
-                "/api/contracts/bids/ranking"
+            req.method === 'GET' &&
+            path === '/api/chat'
         ) {
-            return contractRanking(
-                req,
-                res
-            );
+            return getChat(req, res);
         }
 
-        /* -------------------------------------------------
-           ALLIANCES
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/alliances"
+            req.method === 'POST' &&
+            path === '/api/chat'
         ) {
-            return alliances(
-                req,
-                res,
-                player
-            );
+            return sendChat(req, res, player);
+        }
+
+        /* ---------- ARMY ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/army'
+        ) {
+            return army(req, res, player);
         }
 
         if (
-            req.method === "POST" &&
+            req.method === 'POST' &&
             (
-                path ===
-                "/api/alliances" ||
-                path ===
-                "/api/alliances/create"
+                path === '/api/army/upgrade' ||
+                path === '/api/army/update'
             )
         ) {
-            return createAlliance(
-                req,
-                res,
-                player,
-                body
-            );
+            return upgradeArmy(req, res, player);
         }
 
+        /* ---------- WARS ---------- */
+
         if (
-            req.method === "POST" &&
-            path ===
-                "/api/alliances/join"
+            req.method === 'POST' &&
+            path === '/api/wars'
         ) {
-            return joinAlliance(
-                req,
-                res,
-                player,
-                body
-            );
+            return wars(req, res, player);
         }
 
-        /* -------------------------------------------------
-           CHAT
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/chat"
+            req.method === 'GET' &&
+            path === '/api/wars'
         ) {
-            return getChat(
-                req,
-                res
+            const result = await query(
+                `
+                SELECT *
+                FROM wars
+                WHERE attacker_id=$1 OR defender_id=$1
+                ORDER BY created_at DESC
+                LIMIT 100
+                `,
+                [player.id]
             );
+
+            return json(res, 200, {
+                success: true,
+                wars: result.rows
+            });
         }
 
+        /* ---------- COUNTRY RELATIONS ---------- */
+
         if (
-            req.method === "POST" &&
-            path === "/api/chat"
+            req.method === 'GET' &&
+            path === '/api/country-relations'
         ) {
-            return sendChat(
-                req,
-                res,
-                player,
-                body
-            );
+            return countryRelations(req, res, player);
         }
 
-        /* -------------------------------------------------
-           LOANS
-        ------------------------------------------------- */
-
         if (
-            req.method === "GET" &&
-            path === "/api/loans"
+            req.method === 'POST' &&
+            path === '/api/country-relations/improve'
         ) {
-            return loans(
-                req,
-                res,
-                player
-            );
+            return improveCountryRelation(req, res, player);
+        }
+
+        /* ---------- MARKETING ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/marketing'
+        ) {
+            return marketing(req, res, player);
         }
 
         if (
-            req.method === "POST" &&
+            req.method === 'POST' &&
+            path === '/api/marketing/campaign'
+        ) {
+            return marketingCampaign(req, res, player);
+        }
+
+        /* ---------- BUSINESS CENTER ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/business-center'
+        ) {
+            return businessCenter(req, res, player);
+        }
+
+        /* ---------- CHALLENGES ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/challenges'
+        ) {
+            return challenges(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/challenges/claim'
+        ) {
+            return claimChallenge(req, res, player);
+        }
+
+        /* ---------- CEO ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/ceo'
+        ) {
+            return ceo(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/ceo/upgrade'
+        ) {
+            return upgradeCeo(req, res, player);
+        }
+
+        /* ---------- COLLECTIONS ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/collections'
+        ) {
+            return collections(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/collections/claim'
+        ) {
+            return claimCollection(req, res, player);
+        }
+
+        /* ---------- SPECIAL ITEMS ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/special-items'
+        ) {
+            return specialItems(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/special-items/buy'
+        ) {
+            return buySpecialItem(req, res, player);
+        }
+
+        /* ---------- STOCK MARKET ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/stock-market'
+        ) {
+            return stockMarket(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/stock-market/buy'
+        ) {
+            return buyStock(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/stock-market/sell'
+        ) {
+            return sellStock(req, res, player);
+        }
+
+        /* ---------- PRODUCTION ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/production'
+        ) {
+            return production(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/production/order'
+        ) {
+            return productionOrder(req, res, player);
+        }
+
+        /* ---------- SPACE ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/space'
+        ) {
+            return space(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/space/upgrade'
+        ) {
+            return spaceUpgrade(req, res, player);
+        }
+
+        /* ---------- CONGRESS ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/congress'
+        ) {
+            return congress(req, res);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/congress/create'
+        ) {
+            return createResolution(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
+            path === '/api/congress/vote'
+        ) {
+            return voteResolution(req, res, player);
+        }
+
+        /* ---------- RESEARCH ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/research'
+        ) {
+            return research(req, res, player);
+        }
+
+        if (
+            req.method === 'POST' &&
             (
-                path ===
-                "/api/loans/take" ||
-                path ===
-                "/api/loans"
+                path === '/api/research/upgrade' ||
+                path === '/api/research'
             )
         ) {
-            return takeLoan(
-                req,
-                res,
-                player,
-                body
-            );
+            return researchUpgrade(req, res, player);
         }
 
-        /* -------------------------------------------------
-           COUNTRY RELATIONS
-        ------------------------------------------------- */
+        /* ---------- MISSIONS ---------- */
 
         if (
-            req.method === "GET" &&
-            path ===
-                "/api/country-relations"
+            req.method === 'GET' &&
+            path === '/api/missions'
         ) {
-            return countryRelations(
-                req,
-                res,
-                player
-            );
+            return missions(req, res, player);
+        }
+
+        /* ---------- MEGA PROJECTS ---------- */
+
+        if (
+            req.method === 'GET' &&
+            path === '/api/mega-projects'
+        ) {
+            return megaProjects(req, res, player);
         }
 
         if (
-            req.method === "POST" &&
-            path ===
-                "/api/country-relations/improve"
+            req.method === 'POST' &&
+            path === '/api/mega-projects/create'
         ) {
-            return improveCountryRelation(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           MARKETING
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/marketing"
-        ) {
-            return marketing(
-                req,
-                res,
-                player
-            );
+            return createMegaProject(req, res, player);
         }
 
         if (
-            req.method === "POST" &&
-            path ===
-                "/api/marketing/campaign"
+            req.method === 'POST' &&
+            path === '/api/mega-projects/invest'
         ) {
-            return createMarketingCampaign(
-                req,
-                res,
-                player,
-                body
-            );
+            return investMegaProject(req, res, player);
         }
 
-        /* -------------------------------------------------
-           BUSINESS CENTER
-        ------------------------------------------------- */
+        /* ---------- INCOME ---------- */
 
         if (
-            req.method === "GET" &&
-            path ===
-                "/api/business-center"
+            req.method === 'GET' &&
+            path === '/api/income'
         ) {
-            return businessCenter(
-                req,
-                res,
-                player
-            );
+            const income = await processIncome(player.id);
+
+            return json(res, 200, {
+                success: true,
+                ...income,
+                player: await playerSummary(player.id)
+            });
         }
 
-        /* -------------------------------------------------
-           CHALLENGES
-        ------------------------------------------------- */
+        /* ---------- COUNTRIES ---------- */
 
         if (
-            req.method === "GET" &&
-            path === "/api/challenges"
+            req.method === 'GET' &&
+            path === '/api/countries'
         ) {
-            return challenges(
-                req,
-                res,
-                player
-            );
+            return json(res, 200, {
+                success: true,
+                countries: COUNTRIES
+            });
         }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/challenges/claim"
-        ) {
-            return claimChallenge(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           CEO
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/ceo"
-        ) {
-            return ceo(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/ceo/upgrade"
-        ) {
-            return upgradeCEO(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           COLLECTIONS
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/collections"
-        ) {
-            return collections(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/collections/claim"
-        ) {
-            return claimCollection(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           SPECIAL ITEMS
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path ===
-                "/api/special-items"
-        ) {
-            return specialItems(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/special-items/buy"
-        ) {
-            return buySpecialItem(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           STOCK MARKET
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path ===
-                "/api/stock-market"
-        ) {
-            return stockMarket(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/stock-market/buy"
-        ) {
-            return buyStock(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/stock-market/sell"
-        ) {
-            return sellStock(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           PRODUCTION
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/production"
-        ) {
-            return production(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/production/order"
-        ) {
-            return productionOrder(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/production/complete"
-        ) {
-            return completeProduction(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           SPACE
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/space"
-        ) {
-            return space(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/space/upgrade"
-        ) {
-            return upgradeSpace(
-                req,
-                res,
-                player
-            );
-        }
-
-        /* -------------------------------------------------
-           CONGRESS
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/congress"
-        ) {
-            return congress(
-                req,
-                res,
-                player
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/congress/create"
-        ) {
-            return createResolution(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        if (
-            req.method === "POST" &&
-            path ===
-                "/api/congress/vote"
-        ) {
-            return voteCongress(
-                req,
-                res,
-                player,
-                body
-            );
-        }
-
-        /* -------------------------------------------------
-           MISSIONS
-        ------------------------------------------------- */
-
-        if (
-            req.method === "GET" &&
-            path === "/api/missions"
-        ) {
-            return missions(
-                req,
-                res,
-                player
-            );
-        }
-
-        /* -------------------------------------------------
-           404
-        ------------------------------------------------- */
 
         return error(
             res,
             404,
-            "Endpoint not found"
+            `Endpoint not found: ${req.method} ${path}`
         );
 
-    } catch (err) {
-
-        console.error(
-            "REQUEST ERROR:",
-            err
-        );
+    } catch (e) {
+        console.error('REQUEST ERROR:', e);
 
         return error(
             res,
             500,
-            "Internal server error",
+            'Server error',
             {
-                detail:
-                    process.env.NODE_ENV ===
-                    "development"
-                        ? err.message
-                        : undefined
+                details:
+                    process.env.NODE_ENV === 'production'
+                        ? undefined
+                        : e.message
             }
         );
     }
 }
 
 /* =========================================================
-   SERVER
+   SERVER START
 ========================================================= */
 
-const server =
-    http.createServer(
-        router
-    );
-
 async function start() {
-
     try {
+        await query('SELECT 1');
 
         await initDatabase();
 
-        server.listen(
-            PORT,
-            "0.0.0.0",
-            () => {
+        const server = http.createServer(route);
 
-                console.log(
-                    "========================================"
-                );
+        server.listen(PORT, '0.0.0.0', () => {
+            console.log('======================================');
+            console.log('TYCOON EMPIRE SERVER');
+            console.log(`VERSION: ${VERSION}`);
+            console.log(`PORT: ${PORT}`);
+            console.log('DATABASE: PostgreSQL');
+            console.log('STATUS: ONLINE');
+            console.log('======================================');
+        });
 
-                console.log(
-                    " TYCOON EMPIRE SERVER"
-                );
+        process.on('SIGTERM', async () => {
+            console.log('SIGTERM received.');
 
-                console.log(
-                    ` Version: ${VERSION}`
-                );
+            server.close(async () => {
+                await pool.end();
+                process.exit(0);
+            });
+        });
 
-                console.log(
-                    ` Port: ${PORT}`
-                );
+        process.on('SIGINT', async () => {
+            console.log('SIGINT received.');
 
-                console.log(
-                    " Database: PostgreSQL"
-                );
+            server.close(async () => {
+                await pool.end();
+                process.exit(0);
+            });
+        });
 
-                console.log(
-                    " Catalog: REFERENCE-PDF-1.0"
-                );
-
-                console.log(
-                    "========================================"
-                );
-            }
-        );
-
-    } catch (err) {
-
-        console.error(
-            "SERVER START FAILED:"
-        );
-
-        console.error(err);
-
+    } catch (e) {
+        console.error('SERVER START FAILED:');
+        console.error(e);
         process.exit(1);
     }
 }
-
-process.on(
-    "SIGTERM",
-    async () => {
-
-        console.log(
-            "SIGTERM received."
-        );
-
-        await pool.end();
-
-        server.close(
-            () => process.exit(0)
-        );
-    }
-);
-
-process.on(
-    "SIGINT",
-    async () => {
-
-        console.log(
-            "SIGINT received."
-        );
-
-        await pool.end();
-
-        server.close(
-            () => process.exit(0)
-        );
-    }
-);
 
 start();
