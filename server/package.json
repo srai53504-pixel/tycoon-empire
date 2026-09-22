@@ -1,13 +1,13 @@
 {
-  "name": "tycoon-empire-server",
-  "version": "2.2.1",
+  "name": "entrepreneur-empire-server",
+  "version": "1.0.0",
   "private": true,
-  "description": "Tycoon Empire private multiplayer PostgreSQL backend",
-  "type": "commonjs",
-  "scripts": {
-    "start": "node server.js"
-  },
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
   "dependencies": {
-    "pg": "^8.16.3"
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2"
   }
 }
