@@ -2,8 +2,13 @@
   "name": "tycoon-empire-server",
   "version": "0.8.0",
   "private": true,
+  "description": "Private multiplayer backend for Tycoon Empire",
   "type": "commonjs",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
