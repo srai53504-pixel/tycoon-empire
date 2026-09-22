@@ -1,8 +1,8 @@
 {
   "name": "tycoon-empire-server",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "private": true,
-  "description": "Tycoon Empire private multiplayer backend",
+  "description": "Tycoon Empire private multiplayer PostgreSQL backend",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js"
