@@ -498,7 +498,7 @@ async function initDatabase() {
         CREATE TABLE IF NOT EXISTS running_contracts (
             id TEXT PRIMARY KEY,
             contract_id TEXT NOT NULL,
-            player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+            player_id TEXT NOT NULL,
             reward BIGINT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             ends_at TIMESTAMPTZ NOT NULL,
