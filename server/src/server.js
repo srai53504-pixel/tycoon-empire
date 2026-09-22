@@ -2,59 +2,37 @@ const http = require("http");
 const crypto = require("crypto");
 
 const PORT = process.env.PORT || 10000;
-const VERSION = "0.7.0";
-
-/*
-=========================================================
-TYCOON EMPIRE - PRIVATE MULTIPLAYER SERVER
-=========================================================
-
-CommonJS server.
-Keep server/package.json:
-{
-  "type": "commonjs"
-}
-
-The server is intentionally self-contained and uses
-in-memory storage for this development version.
-
-IMPORTANT:
-The prices below are YOUR GAME'S CURRENT CONFIGURATION.
-They are not claimed to be the exact original game's
-server-side prices.
-=========================================================
-*/
+const VERSION = "0.8.0";
 
 const db = {
   players: [],
-  sessions: {},
   assets: [],
-  sites: [],
   contracts: [],
-  bids: [],
-  wars: [],
   alliances: [],
-  allianceMembers: [],
+  wars: [],
   chat: [],
   loans: [],
   missions: [],
+  research: [],
+  megaProjects: [],
+  sites: [],
+  sessions: {},
+
   nextPlayerId: 1,
   nextAssetId: 1,
-  nextSiteId: 1,
   nextContractId: 1,
-  nextBidId: 1,
-  nextWarId: 1,
   nextAllianceId: 1,
+  nextWarId: 1,
   nextMessageId: 1,
   nextLoanId: 1,
-  nextMissionId: 1
+  nextMissionId: 1,
+  nextResearchId: 1,
+  nextMegaId: 1
 };
 
-/*
-=========================================================
-LEVEL SYSTEM
-=========================================================
-*/
+/* =========================================================
+   LEVEL SYSTEM
+   ========================================================= */
 
 const LEVELS = [
   {
@@ -62,192 +40,276 @@ const LEVELS = [
     title: "Entrepreneur",
     netWorth: 0,
     xp: 0,
-    rewardCash: 0
+    goldReward: 0,
+    prestige: 0,
+    properties: 0,
+    offensive: 1,
+    patriotism: 0,
+    investments: 0,
+    allies: 0,
+    megaProjects: 0,
+    brand: 0
   },
   {
     level: 2,
-    title: "Business Owner",
+    title: "Businessman",
     netWorth: 250000,
-    xp: 500,
-    rewardCash: 25000
+    xp: 250,
+    goldReward: 25,
+    prestige: 0,
+    properties: 1,
+    offensive: 1,
+    patriotism: 0,
+    investments: 0,
+    allies: 0,
+    megaProjects: 0,
+    brand: 0
   },
   {
     level: 3,
-    title: "Business Executive",
-    netWorth: 750000,
-    xp: 1200,
-    rewardCash: 50000
+    title: "Executive",
+    netWorth: 1000000,
+    xp: 750,
+    goldReward: 50,
+    prestige: 5,
+    properties: 2,
+    offensive: 2,
+    patriotism: 0,
+    investments: 1,
+    allies: 0,
+    megaProjects: 0,
+    brand: 0
   },
   {
     level: 4,
-    title: "Business Leader",
-    netWorth: 2000000,
-    xp: 2500,
-    rewardCash: 100000
+    title: "Director",
+    netWorth: 5000000,
+    xp: 1500,
+    goldReward: 75,
+    prestige: 10,
+    properties: 3,
+    offensive: 2,
+    patriotism: 5,
+    investments: 2,
+    allies: 0,
+    megaProjects: 0,
+    brand: 5
   },
   {
     level: 5,
-    title: "Industrialist",
-    netWorth: 5000000,
-    xp: 5000,
-    rewardCash: 200000
+    title: "CEO",
+    netWorth: 15000000,
+    xp: 3000,
+    goldReward: 100,
+    prestige: 20,
+    properties: 5,
+    offensive: 3,
+    patriotism: 10,
+    investments: 3,
+    allies: 1,
+    megaProjects: 0,
+    brand: 10
   },
   {
     level: 6,
-    title: "Corporate Leader",
-    netWorth: 12000000,
-    xp: 9000,
-    rewardCash: 350000
+    title: "Industrialist",
+    netWorth: 50000000,
+    xp: 6000,
+    goldReward: 150,
+    prestige: 30,
+    properties: 7,
+    offensive: 4,
+    patriotism: 15,
+    investments: 5,
+    allies: 1,
+    megaProjects: 1,
+    brand: 20
   },
   {
     level: 7,
-    title: "Tycoon",
-    netWorth: 30000000,
-    xp: 15000,
-    rewardCash: 500000
+    title: "Magnate",
+    netWorth: 150000000,
+    xp: 12000,
+    goldReward: 200,
+    prestige: 45,
+    properties: 10,
+    offensive: 5,
+    patriotism: 20,
+    investments: 7,
+    allies: 2,
+    megaProjects: 1,
+    brand: 30
   },
   {
     level: 8,
-    title: "CEO",
-    netWorth: 75000000,
+    title: "Tycoon",
+    netWorth: 500000000,
     xp: 25000,
-    rewardCash: 750000
+    goldReward: 300,
+    prestige: 60,
+    properties: 14,
+    offensive: 6,
+    patriotism: 25,
+    investments: 10,
+    allies: 2,
+    megaProjects: 2,
+    brand: 40
   },
   {
     level: 9,
-    title: "Corporate Mogul",
-    netWorth: 150000000,
-    xp: 40000,
-    rewardCash: 1000000
+    title: "Mogul",
+    netWorth: 1500000000,
+    xp: 50000,
+    goldReward: 400,
+    prestige: 80,
+    properties: 18,
+    offensive: 8,
+    patriotism: 30,
+    investments: 14,
+    allies: 3,
+    megaProjects: 2,
+    brand: 50
   },
   {
     level: 10,
-    title: "National Industrialist",
-    netWorth: 300000000,
-    xp: 60000,
-    rewardCash: 1500000
+    title: "World Leader",
+    netWorth: 5000000000,
+    xp: 100000,
+    goldReward: 500,
+    prestige: 100,
+    properties: 22,
+    offensive: 10,
+    patriotism: 40,
+    investments: 18,
+    allies: 4,
+    megaProjects: 3,
+    brand: 60
   },
   {
     level: 11,
-    title: "Global Tycoon",
-    netWorth: 750000000,
-    xp: 90000,
-    rewardCash: 2500000
+    title: "Global Magnate",
+    netWorth: 15000000000,
+    xp: 200000,
+    goldReward: 700,
+    prestige: 125,
+    properties: 27,
+    offensive: 12,
+    patriotism: 50,
+    investments: 23,
+    allies: 5,
+    megaProjects: 4,
+    brand: 70
   },
   {
     level: 12,
-    title: "Corporate Empire",
-    netWorth: 1500000000,
-    xp: 130000,
-    rewardCash: 5000000
+    title: "Empire Builder",
+    netWorth: 50000000000,
+    xp: 400000,
+    goldReward: 900,
+    prestige: 150,
+    properties: 32,
+    offensive: 14,
+    patriotism: 60,
+    investments: 30,
+    allies: 6,
+    megaProjects: 5,
+    brand: 80
   },
   {
     level: 13,
-    title: "Global Empire",
-    netWorth: 3000000000,
-    xp: 180000,
-    rewardCash: 10000000
+    title: "Economic Power",
+    netWorth: 150000000000,
+    xp: 800000,
+    goldReward: 1200,
+    prestige: 180,
+    properties: 38,
+    offensive: 16,
+    patriotism: 70,
+    investments: 40,
+    allies: 7,
+    megaProjects: 6,
+    brand: 90
   },
   {
     level: 14,
-    title: "Economic Power",
-    netWorth: 7500000000,
-    xp: 250000,
-    rewardCash: 20000000
+    title: "Global Empire",
+    netWorth: 500000000000,
+    xp: 1600000,
+    goldReward: 1500,
+    prestige: 220,
+    properties: 45,
+    offensive: 18,
+    patriotism: 80,
+    investments: 50,
+    allies: 8,
+    megaProjects: 8,
+    brand: 100
   },
   {
     level: 15,
-    title: "World Tycoon",
-    netWorth: 15000000000,
-    xp: 350000,
-    rewardCash: 50000000
+    title: "Economic Emperor",
+    netWorth: 1000000000000,
+    xp: 3000000,
+    goldReward: 2500,
+    prestige: 300,
+    properties: 55,
+    offensive: 20,
+    patriotism: 100,
+    investments: 65,
+    allies: 10,
+    megaProjects: 10,
+    brand: 120
   }
 ];
 
-/*
-=========================================================
-COUNTRIES
-=========================================================
-*/
-
-const COUNTRIES = [
-  "India",
-  "United States",
-  "United Kingdom",
-  "Germany",
-  "France",
-  "Italy",
-  "Spain",
-  "Canada",
-  "Brazil",
-  "Mexico",
-  "Australia",
-  "Japan",
-  "South Korea",
-  "China",
-  "Indonesia",
-  "Singapore",
-  "United Arab Emirates",
-  "Saudi Arabia",
-  "South Africa",
-  "Turkey",
-  "Netherlands",
-  "Switzerland",
-  "Norway",
-  "Sweden",
-  "Denmark"
-];
-
-/*
-=========================================================
-ASSET CATALOG
-=========================================================
-*/
+/* =========================================================
+   ASSETS
+   ========================================================= */
 
 const catalog = [
-  // BUSINESSES
+  /* Businesses */
   ["business", "Coffee House", 50000, 350],
   ["business", "Clothes Shop", 75000, 500],
-  ["business", "Fast Food", 100000, 700],
+  ["business", "Fast Food", 100000, 750],
   ["business", "Restaurant", 150000, 1100],
   ["business", "Supermarket", 300000, 2200],
-  ["business", "Electronics Shop", 450000, 3200],
-  ["business", "Sports Shop", 550000, 4000],
-  ["business", "Lottery Shop", 650000, 4700],
-  ["business", "Gym", 800000, 6000],
-  ["business", "CrossFit Studio", 900000, 6800],
-  ["business", "Dance Club", 1000000, 7500],
-  ["business", "Bowling", 1300000, 9500],
-  ["business", "Pool Hall", 1500000, 11000],
-  ["business", "Pub", 1800000, 13500],
-  ["business", "Spa Club", 2200000, 16500],
-  ["business", "Movie Theatre", 3000000, 22000],
-  ["business", "Casino Hotel", 7000000, 52000],
-  ["business", "Winery", 9000000, 68000],
-  ["business", "Chocolatier Shop", 11000000, 85000],
-  ["business", "Chef Restaurant", 15000000, 115000],
-  ["business", "Escape Room", 18000000, 135000],
+  ["business", "Electronics Shop", 500000, 3800],
+  ["business", "Sports Shop", 700000, 5200],
+  ["business", "Lottery Shop", 900000, 6500],
+  ["business", "Gym", 1200000, 8500],
+  ["business", "CrossFit Studio", 1500000, 10500],
+  ["business", "Dance Club", 2000000, 14000],
+  ["business", "Bowling", 2500000, 18000],
+  ["business", "Pool Hall", 3000000, 22000],
+  ["business", "Pub", 4000000, 30000],
+  ["business", "Spa Club", 5000000, 38000],
+  ["business", "Movie Theatre", 7500000, 55000],
+  ["business", "Casino Hotel", 15000000, 110000],
+  ["business", "Winery", 20000000, 150000],
+  ["business", "Chocolatier Shop", 30000000, 225000],
+  ["business", "Chef Restaurant", 50000000, 380000],
+  ["business", "Escape Room", 75000000, 550000],
 
-  // TRANSPORTATION
+  /* Transportation */
   ["transportation", "Taxi", 25000, 200],
   ["transportation", "Bus", 100000, 850],
   ["transportation", "Train", 500000, 4500],
-  ["transportation", "Tram", 750000, 6500],
+  ["transportation", "Tram", 750000, 6000],
   ["transportation", "Limousine", 250000, 2200],
-  ["transportation", "Yacht", 1500000, 12000],
-  ["transportation", "Helicopter", 2500000, 20000],
-  ["transportation", "Hovercraft", 3500000, 28000],
+  ["transportation", "Yacht", 2500000, 20000],
+  ["transportation", "Helicopter", 3500000, 28000],
+  ["transportation", "Hovercraft", 5000000, 40000],
   ["transportation", "Passenger Ship", 7500000, 60000],
-  ["transportation", "Cargo Ship", 5000000, 42000],
-  ["transportation", "Cargo Airplane", 12000000, 95000],
-  ["transportation", "Crude Oil Carrier", 20000000, 160000],
-  ["transportation", "Submarine", 30000000, 240000],
-  ["transportation", "Driverless Taxi", 500000, 4500],
-  ["transportation", "Super Fast Train", 25000000, 200000],
-  ["transportation", "Super Tank", 50000000, 400000],
-  ["transportation", "Melee Robot", 75000000, 600000],
+  ["transportation", "Cargo Ship", 10000000, 80000],
+  ["transportation", "Cargo Airplane", 15000000, 120000],
+  ["transportation", "Crude Oil Carrier", 25000000, 200000],
+  ["transportation", "Submarine", 40000000, 320000],
+  ["transportation", "Driverless Taxi", 50000000, 400000],
+  ["transportation", "Super Fast Train", 100000000, 800000],
+  ["transportation", "Super Tank", 150000000, 1200000],
+  ["transportation", "Melee Robot", 250000000, 2000000],
 
-  // CONCESSIONS
+  /* Concessions */
   ["concession", "Ground Transport", 150000, 1200],
   ["concession", "Commerce", 300000, 2500],
   ["concession", "Leisure", 500000, 4000],
@@ -255,57 +317,52 @@ const catalog = [
   ["concession", "Sea Lines", 7500000, 60000],
   ["concession", "Real Estate", 10000000, 90000],
 
-  // SUBSIDIARIES
-  ["subsidiary", "Bank", 15000000, 110000],
-  ["subsidiary", "Betting", 20000000, 150000],
-  ["subsidiary", "Business Center", 25000000, 190000],
-  ["subsidiary", "Medical Center", 30000000, 220000],
-  ["subsidiary", "Mining Company", 40000000, 300000],
-  ["subsidiary", "Products Market", 35000000, 260000],
-  ["subsidiary", "Robots Center", 50000000, 400000],
-  ["subsidiary", "Soccer Team", 60000000, 450000],
-  ["subsidiary", "Space Center", 100000000, 750000],
-  ["subsidiary", "Stock Market", 125000000, 900000],
-  ["subsidiary", "Travel Company", 45000000, 340000],
+  /* Subsidiaries */
+  ["subsidiary", "Bank", 10000000, 85000],
+  ["subsidiary", "Betting", 15000000, 125000],
+  ["subsidiary", "Business Center", 25000000, 200000],
+  ["subsidiary", "Medical Center", 30000000, 240000],
+  ["subsidiary", "Mining Company", 40000000, 320000],
+  ["subsidiary", "Products Market", 50000000, 400000],
+  ["subsidiary", "Robots Center", 75000000, 600000],
+  ["subsidiary", "Soccer Team", 100000000, 800000],
+  ["subsidiary", "Space Center", 250000000, 2000000],
+  ["subsidiary", "Stock Market", 300000000, 2500000],
+  ["subsidiary", "Travel Company", 500000000, 4000000],
 
-  // INVESTMENTS
-  ["investment", "Blockchain", 5000000, 0],
-  ["investment", "Energy", 7500000, 0],
-  ["investment", "Health", 8000000, 0],
+  /* Investments */
+  ["investment", "Blockchain", 1000000, 0],
+  ["investment", "Energy", 2500000, 0],
+  ["investment", "Health", 5000000, 0],
   ["investment", "High-Tech", 10000000, 0],
-  ["investment", "Internet Communications", 12000000, 0],
-  ["investment", "Natural Resources", 15000000, 0],
-  ["investment", "Nuclear", 25000000, 0],
-  ["investment", "Real Estate", 18000000, 0],
-  ["investment", "Security Weapons", 30000000, 0],
-  ["investment", "Transportation", 20000000, 0],
+  ["investment", "Internet Communications", 15000000, 0],
+  ["investment", "Natural Resources", 25000000, 0],
+  ["investment", "Nuclear", 50000000, 0],
+  ["investment", "Real Estate", 75000000, 0],
+  ["investment", "Security Weapons", 100000000, 0],
+  ["investment", "Transportation", 150000000, 0],
 
-  // PROPERTIES
+  /* Properties */
   ["property", "Office Building", 250000, 1500],
   ["property", "Living Building", 750000, 5000],
-  ["property", "Mall", 5000000, 40000],
-  ["property", "Skyscraper", 25000000, 200000],
+  ["property", "Mall", 2500000, 18000],
+  ["property", "Skyscraper", 10000000, 80000],
 
-  // RESEARCH
-  ["research", "Business AI", 3000000, 0],
-  ["research", "Advanced Logistics", 5000000, 0],
-  ["research", "Robotics", 12000000, 0],
+  /* Production */
+  ["production", "Food Factory", 5000000, 45000],
+  ["production", "Vehicle Factory", 25000000, 220000],
+  ["production", "Electronics Factory", 50000000, 450000],
 
-  // PRODUCTION
-  ["production", "Food Factory", 5000000, 38000],
-  ["production", "Vehicle Factory", 15000000, 110000],
-  ["production", "Electronics Factory", 30000000, 230000],
-
-  // RESOURCES
+  /* Resources */
   ["resource", "Oil", 1000000, 8000],
   ["resource", "Gold", 1500000, 12000],
-  ["resource", "Silver", 1200000, 9500],
-  ["resource", "Iron", 750000, 6000],
-  ["resource", "Copper", 900000, 7200],
-  ["resource", "Aluminum", 1000000, 8000],
-  ["resource", "Diamonds", 2500000, 20000],
-  ["resource", "Gems", 2200000, 18000],
-  ["resource", "Salt", 500000, 3500]
+  ["resource", "Silver", 900000, 7000],
+  ["resource", "Iron", 600000, 5000],
+  ["resource", "Copper", 700000, 5500],
+  ["resource", "Aluminum", 800000, 6200],
+  ["resource", "Diamonds", 5000000, 40000],
+  ["resource", "Gems", 2500000, 20000],
+  ["resource", "Salt", 350000, 2800]
 ];
 
 for (const item of catalog) {
@@ -315,89 +372,247 @@ for (const item of catalog) {
     type: item[1],
     price: item[2],
     income: item[3],
-    maintenance: Math.floor(item[2] * 0.001),
+    maintenance: Math.floor(item[3] * 0.15),
     tax: Math.floor(item[3] * 0.05),
     description: "Purchase and operate " + item[1]
   });
 }
 
-/*
-=========================================================
-WORLD RESOURCE SITES
-=========================================================
-*/
+/* =========================================================
+   COUNTRIES
+   ========================================================= */
 
-const siteData = [
-  ["Peru Copper", "Peru", "Copper", 1200],
-  ["Brazil Iron", "Brazil", "Iron", 1600],
-  ["Indonesia Nickel", "Indonesia", "Nickel", 1100],
-  ["Australia Gold", "Australia", "Gold", 700],
-  ["Canada Timber", "Canada", "Timber", 900],
-  ["South Africa Platinum", "South Africa", "Platinum", 500],
-  ["Chile Lithium", "Chile", "Lithium", 1300],
-  ["India Bauxite", "India", "Bauxite", 1000],
-  ["Saudi Oil Field", "Saudi Arabia", "Oil", 2200],
-  ["United States Oil Field", "United States", "Oil", 1900],
-  ["China Rare Earth", "China", "Rare Earth", 1500],
-  ["South Africa Gold Field", "South Africa", "Gold", 1000]
+const COUNTRY_NAMES = [
+  "India",
+  "United States",
+  "China",
+  "United Kingdom",
+  "Germany",
+  "France",
+  "Japan",
+  "Canada",
+  "Australia",
+  "Brazil",
+  "Russia",
+  "Italy",
+  "Spain",
+  "South Korea",
+  "Singapore",
+  "United Arab Emirates",
+  "Saudi Arabia",
+  "South Africa",
+  "Mexico",
+  "Indonesia"
 ];
 
-for (const s of siteData) {
+/* =========================================================
+   WORLD RESOURCE SITES
+   ========================================================= */
+
+const SITE_DATA = [
+  ["Peru Copper", "Peru", "Copper", 8000],
+  ["Brazil Iron", "Brazil", "Iron", 9000],
+  ["Indonesia Nickel", "Indonesia", "Nickel", 10000],
+  ["Australia Gold", "Australia", "Gold", 15000],
+  ["Canada Timber", "Canada", "Timber", 7000],
+  ["South Africa Platinum", "South Africa", "Platinum", 18000],
+  ["Chile Lithium", "Chile", "Lithium", 20000],
+  ["India Bauxite", "India", "Aluminum", 11000],
+  ["Saudi Oil Field", "Saudi Arabia", "Oil", 25000],
+  ["United States Oil Field", "United States", "Oil", 23000],
+  ["China Rare Earth", "China", "Rare Earth", 30000],
+  ["South Africa Gold Field", "South Africa", "Gold", 17000]
+];
+
+for (const item of SITE_DATA) {
   db.sites.push({
-    id: db.nextSiteId++,
-    name: s[0],
-    country: s[1],
-    resource: s[2],
-    rate: s[3],
-    claimFee: 100000,
+    id: db.sites.length + 1,
+    name: item[0],
+    country: item[1],
+    resource: item[2],
+    rate: item[3],
     ownerId: null
   });
 }
 
-/*
-=========================================================
-CONTRACTS
-=========================================================
-*/
+/* =========================================================
+   RESEARCH
+   ========================================================= */
 
-const contractNames = [
-  "Natural Resources",
-  "Transportation",
-  "Real Estate",
-  "Manufacturing",
-  "Technology",
-  "Food Supply",
-  "Construction",
-  "Energy",
-  "International Trade",
-  "Defence Supply",
-  "Logistics",
-  "Tourism"
+const RESEARCH_CATALOG = [
+  {
+    id: "business_ai",
+    name: "Business AI",
+    cost: 5000000,
+    xp: 500,
+    description: "Improves company income by 5% per level."
+  },
+  {
+    id: "advanced_logistics",
+    name: "Advanced Logistics",
+    cost: 10000000,
+    xp: 800,
+    description: "Reduces transportation maintenance."
+  },
+  {
+    id: "robotics",
+    name: "Robotics",
+    cost: 25000000,
+    xp: 1200,
+    description: "Unlocks advanced robotic operations."
+  },
+  {
+    id: "quantum_computing",
+    name: "Quantum Computing",
+    cost: 75000000,
+    xp: 2500,
+    description: "Improves high-tech investments."
+  },
+  {
+    id: "space_engineering",
+    name: "Space Engineering",
+    cost: 150000000,
+    xp: 5000,
+    description: "Improves space projects."
+  }
 ];
 
-for (let i = 0; i < 24; i++) {
-  db.contracts.push({
-    id: db.nextContractId++,
-    name:
-      contractNames[i % contractNames.length] +
-      " Contract #" +
-      (i + 1),
-    country:
-      COUNTRIES[(i + 2) % COUNTRIES.length],
-    quantity: 1000 + i * 500,
-    marketValue: 500000 + i * 250000,
-    durationHours: 6 + (i % 5),
-    status: "open",
-    winnerId: null,
-    winningBid: null
-  });
-}
+/* =========================================================
+   MEGA PROJECTS
+   ========================================================= */
 
-/*
-=========================================================
-UTILITIES
-=========================================================
-*/
+const MEGA_PROJECT_CATALOG = [
+  {
+    id: "global_hq",
+    name: "Global Headquarters",
+    cost: 50000000,
+    rewardCash: 10000000,
+    rewardGold: 100,
+    requiredLevel: 6
+  },
+  {
+    id: "international_airport",
+    name: "International Airport",
+    cost: 150000000,
+    rewardCash: 35000000,
+    rewardGold: 250,
+    requiredLevel: 8
+  },
+  {
+    id: "space_program",
+    name: "National Space Program",
+    cost: 500000000,
+    rewardCash: 100000000,
+    rewardGold: 500,
+    requiredLevel: 10
+  },
+  {
+    id: "orbital_city",
+    name: "Orbital City",
+    cost: 2000000000,
+    rewardCash: 500000000,
+    rewardGold: 1500,
+    requiredLevel: 13
+  },
+  {
+    id: "global_trade_network",
+    name: "Global Trade Network",
+    cost: 5000000000,
+    rewardCash: 1500000000,
+    rewardGold: 3000,
+    requiredLevel: 15
+  }
+];
+
+/* =========================================================
+   MISSIONS
+   ========================================================= */
+
+const MISSION_TEMPLATES = [
+  {
+    title: "First Investment",
+    type: "investment",
+    target: 1,
+    rewardCash: 50000,
+    rewardGold: 10,
+    rewardXP: 100
+  },
+  {
+    title: "Build Your Fleet",
+    type: "transportation",
+    target: 5,
+    rewardCash: 150000,
+    rewardGold: 20,
+    rewardXP: 250
+  },
+  {
+    title: "Business Expansion",
+    type: "business",
+    target: 10,
+    rewardCash: 500000,
+    rewardGold: 40,
+    rewardXP: 500
+  },
+  {
+    title: "World Investor",
+    type: "investment_value",
+    target: 10000000,
+    rewardCash: 1000000,
+    rewardGold: 75,
+    rewardXP: 1000
+  },
+  {
+    title: "Military Power",
+    type: "military",
+    target: 1000,
+    rewardCash: 2000000,
+    rewardGold: 100,
+    rewardXP: 1500
+  },
+  {
+    title: "Global Empire",
+    type: "net_worth",
+    target: 100000000,
+    rewardCash: 10000000,
+    rewardGold: 250,
+    rewardXP: 5000
+  }
+];
+
+/* =========================================================
+   MILITARY
+   ========================================================= */
+
+const MILITARY_UNITS = [
+  ["soldiers", "Soldiers", 1000, 1, 1],
+  ["small_tanks", "Small Tanks", 5000, 5, 3],
+  ["medium_tanks", "Medium Tanks", 15000, 12, 8],
+  ["heavy_tanks", "Heavy Tanks", 40000, 30, 20],
+  ["light_artillery", "Light Artillery", 10000, 10, 12],
+  ["heavy_artillery", "Heavy Artillery", 30000, 30, 35],
+  ["mlrs", "MLRS", 75000, 70, 55],
+  ["fighter_aircraft", "Fighter Aircraft", 150000, 120, 90],
+  ["intelligence_aircraft", "Intelligence Aircraft", 175000, 100, 130],
+  ["gunships", "Gunships", 250000, 220, 160],
+  ["navy_seals", "Navy SEALs", 200000, 180, 170],
+  ["special_forces", "Special Forces", 350000, 350, 300],
+  ["cyber_soldiers", "Cyber Soldiers", 400000, 250, 400],
+  ["cyber_warriors", "Cyber Warriors", 750000, 500, 750],
+  ["battle_cruisers", "Battle Cruisers", 2000000, 1800, 1500],
+  ["aircraft_carriers", "Aircraft Carriers", 5000000, 5000, 4500],
+  ["anti_aircraft", "Anti-Aircraft", 500000, 300, 700],
+  ["anti_ship_turrets", "Anti-Ship Shore Turrets", 750000, 600, 1000],
+  ["avenger", "Avenger", 1000000, 800, 1300],
+  ["ballistic_missiles", "Ballistic Missiles", 5000000, 6000, 3000],
+  ["smart_bombs", "Smart Bombs", 2500000, 2500, 1500],
+  ["espionage_satellites", "Espionage Satellites", 10000000, 3500, 7000],
+  ["communication_satellites", "Communication Satellites", 7500000, 2500, 6000],
+  ["defence_robots", "Defence Robots", 15000000, 5000, 12000]
+];
+
+/* =========================================================
+   HELPERS
+   ========================================================= */
 
 function hashPassword(password) {
   return crypto
@@ -408,14 +623,6 @@ function hashPassword(password) {
 
 function createToken() {
   return crypto.randomBytes(32).toString("hex");
-}
-
-function normalize(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ");
 }
 
 function parseBody(req) {
@@ -458,16 +665,23 @@ function send(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function getPlayer(req) {
+function getToken(req) {
   const header =
     req.headers.authorization || "";
 
   if (!header.startsWith("Bearer ")) {
-    return null;
+    return "";
   }
 
-  const token =
-    header.substring(7).trim();
+  return header.substring(7).trim();
+}
+
+function getPlayer(req) {
+  const token = getToken(req);
+
+  if (!token) {
+    return null;
+  }
 
   const id = db.sessions[token];
 
@@ -475,11 +689,9 @@ function getPlayer(req) {
     return null;
   }
 
-  return (
-    db.players.find(
-      p => p.id === id
-    ) || null
-  );
+  return db.players.find(
+    p => p.id === id
+  ) || null;
 }
 
 function requirePlayer(req, res) {
@@ -487,7 +699,7 @@ function requirePlayer(req, res) {
 
   if (!player) {
     send(res, 401, {
-      error: "authentication required"
+      error: "unauthorized"
     });
 
     return null;
@@ -496,62 +708,100 @@ function requirePlayer(req, res) {
   return player;
 }
 
-function findAsset(type) {
-  const wanted = normalize(type);
-
-  return (
-    db.assets.find(
-      a => normalize(a.type) === wanted
-    ) || null
-  );
+function normalizeType(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
 }
 
-function ownedAssetValue(player) {
+function findAsset(type) {
+  const requested =
+    normalizeType(type);
+
+  return db.assets.find(a => {
+    const actual =
+      normalizeType(a.type);
+
+    return (
+      actual === requested ||
+      actual.replace(/\s/g, "") ===
+        requested.replace(/\s/g, "")
+    );
+  }) || null;
+}
+
+function ownedQuantity(player, type) {
+  const owned =
+    (player.assets || []).find(
+      x =>
+        normalizeType(x.type) ===
+        normalizeType(type)
+    );
+
+  return owned
+    ? owned.quantity
+    : 0;
+}
+
+function countCategory(player, category) {
   let total = 0;
 
   for (const owned of player.assets || []) {
-    const asset = findAsset(owned.type);
+    const asset =
+      findAsset(owned.type);
 
-    if (asset) {
-      total +=
-        asset.price *
-        Number(owned.quantity || 0);
+    if (
+      asset &&
+      asset.category === category
+    ) {
+      total += owned.quantity;
     }
   }
 
   return total;
 }
 
-function siteValue(player) {
-  return db.sites
-    .filter(
-      s => s.ownerId === player.id
-    )
-    .reduce(
-      (sum, s) => sum + s.claimFee,
-      0
-    );
-}
-
 function calculateNetWorth(player) {
-  return (
-    Number(player.cash || 0) +
-    ownedAssetValue(player) +
-    siteValue(player)
-  );
+  let value =
+    Number(player.cash || 0);
+
+  for (const owned of player.assets || []) {
+    const asset =
+      findAsset(owned.type);
+
+    if (asset) {
+      value +=
+        asset.price *
+        owned.quantity;
+    }
+  }
+
+  for (const loan of db.loans) {
+    if (
+      loan.playerId === player.id &&
+      !loan.paid
+    ) {
+      value -= loan.remaining;
+    }
+  }
+
+  return Math.max(0, value);
 }
 
 function calculateGrossIncome(player) {
   let total = 0;
 
   for (const owned of player.assets || []) {
-    const asset = findAsset(owned.type);
+    const asset =
+      findAsset(owned.type);
 
     if (!asset) continue;
 
     total +=
       asset.income *
-      Number(owned.quantity || 0);
+      owned.quantity;
   }
 
   return total;
@@ -561,13 +811,14 @@ function calculateMaintenance(player) {
   let total = 0;
 
   for (const owned of player.assets || []) {
-    const asset = findAsset(owned.type);
+    const asset =
+      findAsset(owned.type);
 
     if (!asset) continue;
 
     total +=
       asset.maintenance *
-      Number(owned.quantity || 0);
+      owned.quantity;
   }
 
   return total;
@@ -577,119 +828,237 @@ function calculateTax(player) {
   let total = 0;
 
   for (const owned of player.assets || []) {
-    const asset = findAsset(owned.type);
+    const asset =
+      findAsset(owned.type);
 
     if (!asset) continue;
 
     total +=
       asset.tax *
-      Number(owned.quantity || 0);
+      owned.quantity;
   }
 
   return total;
 }
 
+function calculateNetIncome(player) {
+  return Math.max(
+    0,
+    calculateGrossIncome(player) -
+      calculateMaintenance(player) -
+      calculateTax(player)
+  );
+}
+
+function militaryPower(player) {
+  let power = 0;
+
+  for (
+    const unit of MILITARY_UNITS
+  ) {
+    const count =
+      Number(
+        player.military?.[unit[0]] || 0
+      );
+
+    power +=
+      count *
+      Number(unit[3]);
+  }
+
+  return Math.floor(power);
+}
+
+function armyDefense(player) {
+  return Math.floor(
+    Number(player.defense || 100) +
+    militaryPower(player) * 0.25
+  );
+}
+
 function levelInfo(player) {
-  const netWorth =
-    calculateNetWorth(player);
+  const currentLevel =
+    Math.max(
+      1,
+      Math.min(
+        15,
+        Number(player.level || 1)
+      )
+    );
 
-  let current =
-    LEVELS[player.level - 1] ||
-    LEVELS[LEVELS.length - 1];
+  const current =
+    LEVELS[currentLevel - 1];
 
-  let next =
-    LEVELS[player.level] || null;
+  const next =
+    LEVELS[currentLevel] || null;
 
   return {
-    currentLevel: player.level,
-    title: current.title,
-    xp: player.xp,
-    netWorth,
-    nextLevel: next
-      ? next.level
-      : null,
-    nextTitle: next
-      ? next.title
-      : null,
-    requiredNetWorth: next
-      ? next.netWorth
-      : null,
-    requiredXP: next
-      ? next.xp
-      : null,
-    progressNetWorth: next
-      ? Math.min(
-          1,
-          netWorth /
-            Math.max(1, next.netWorth)
-        )
-      : 1,
-    progressXP: next
-      ? Math.min(
-          1,
-          player.xp /
-            Math.max(1, next.xp)
-        )
-      : 1
+    current,
+    next,
+    maxLevel:
+      currentLevel >= 15
+  };
+}
+
+function checkLevelRequirements(
+  player,
+  next
+) {
+  if (!next) {
+    return {
+      eligible: false,
+      reasons: ["Maximum level reached."]
+    };
+  }
+
+  const reasons = [];
+
+  if (
+    calculateNetWorth(player) <
+    next.netWorth
+  ) {
+    reasons.push(
+      `Net worth: $${next.netWorth.toLocaleString()}`
+    );
+  }
+
+  if (
+    Number(player.xp || 0) <
+    next.xp
+  ) {
+    reasons.push(
+      `XP: ${next.xp.toLocaleString()}`
+    );
+  }
+
+  if (
+    Number(player.ceoPrestige || 0) <
+    next.prestige
+  ) {
+    reasons.push(
+      `CEO prestige: ${next.prestige}`
+    );
+  }
+
+  if (
+    countCategory(
+      player,
+      "property"
+    ) < next.properties
+  ) {
+    reasons.push(
+      `Properties: ${next.properties}`
+    );
+  }
+
+  if (
+    Number(player.offensiveLevel || 1) <
+    next.offensive
+  ) {
+    reasons.push(
+      `Offensive level: ${next.offensive}`
+    );
+  }
+
+  if (
+    Number(player.patriotism || 0) <
+    next.patriotism
+  ) {
+    reasons.push(
+      `Patriotism: ${next.patriotism}`
+    );
+  }
+
+  if (
+    countCategory(
+      player,
+      "investment"
+    ) < next.investments
+  ) {
+    reasons.push(
+      `Investments: ${next.investments}`
+    );
+  }
+
+  if (
+    Number(player.alliedCountries || 0) <
+    next.allies
+  ) {
+    reasons.push(
+      `Allied countries: ${next.allies}`
+    );
+  }
+
+  if (
+    Number(player.megaProjectsCompleted || 0) <
+    next.megaProjects
+  ) {
+    reasons.push(
+      `Mega projects: ${next.megaProjects}`
+    );
+  }
+
+  if (
+    Number(player.brandPoints || 0) <
+    next.brand
+  ) {
+    reasons.push(
+      `Brand points: ${next.brand}`
+    );
+  }
+
+  return {
+    eligible:
+      reasons.length === 0,
+    reasons
   };
 }
 
 function tryLevelUp(player) {
-  const messages = [];
+  let changed = false;
+  const rewards = [];
 
-  while (
-    player.level < LEVELS.length
-  ) {
+  while (player.level < 15) {
     const next =
       LEVELS[player.level];
 
-    const netWorth =
-      calculateNetWorth(player);
+    const result =
+      checkLevelRequirements(
+        player,
+        next
+      );
 
-    if (
-      netWorth < next.netWorth ||
-      player.xp < next.xp
-    ) {
+    if (!result.eligible) {
       break;
     }
 
     player.level++;
 
-    player.cash +=
-      next.rewardCash;
+    const reward =
+      next.goldReward || 0;
 
-    player.gold +=
-      player.level * 10;
+    player.gold =
+      Number(player.gold || 0) +
+      reward;
 
-    messages.push({
+    rewards.push({
       level: player.level,
       title: next.title,
-      rewardCash: next.rewardCash,
-      rewardGold:
-        player.level * 10
+      gold: reward
     });
+
+    changed = true;
   }
 
-  return messages;
+  return {
+    changed,
+    rewards
+  };
 }
 
 function playerView(player) {
-  const gross =
-    calculateGrossIncome(player);
-
-  const maintenance =
-    calculateMaintenance(player);
-
-  const tax =
-    calculateTax(player);
-
-  const netIncome =
-    Math.max(
-      0,
-      gross -
-        maintenance -
-        tax
-    );
+  const info =
+    levelInfo(player);
 
   return {
     id: player.id,
@@ -698,215 +1067,183 @@ function playerView(player) {
     email: player.email,
     companyName: player.companyName,
     country: player.country,
+
     level: player.level,
-    title:
-      LEVELS[player.level - 1]?.title ||
-      "World Tycoon",
+    title: info.current.title,
     xp: player.xp,
+
     cash: player.cash,
     gold: player.gold,
+
     netWorth:
       calculateNetWorth(player),
-    grossIncome: gross,
-    maintenance,
-    tax,
-    netIncome,
+
+    grossIncome:
+      calculateGrossIncome(player),
+
+    maintenance:
+      calculateMaintenance(player),
+
+    tax:
+      calculateTax(player),
+
+    netIncome:
+      calculateNetIncome(player),
+
+    ceoPrestige:
+      player.ceoPrestige,
+
+    patriotism:
+      player.patriotism,
+
+    brandPoints:
+      player.brandPoints,
+
     offensiveLevel:
       player.offensiveLevel,
-    defense: player.defense,
-    patriotism:
-      player.patriotism || 0,
-    brandPoints:
-      player.brandPoints || 0,
-    ceoPrestige:
-      player.ceoPrestige || 0,
+
+    defense:
+      armyDefense(player),
+
+    militaryPower:
+      militaryPower(player),
+
+    alliedCountries:
+      player.alliedCountries,
+
+    megaProjectsCompleted:
+      player.megaProjectsCompleted,
+
     online: true,
-    assets: player.assets || [],
-    levelInfo:
-      levelInfo(player)
+
+    assets:
+      player.assets || [],
+
+    research:
+      player.research || {},
+
+    military:
+      player.military || {}
   };
 }
 
-/*
-=========================================================
-AUTH
-=========================================================
-*/
+function missionProgress(
+  player,
+  mission
+) {
+  switch (mission.type) {
+    case "investment":
+      return countCategory(
+        player,
+        "investment"
+      );
 
-function register(body) {
-  const username =
-    String(body.username || "")
-      .trim();
+    case "transportation":
+      return countCategory(
+        player,
+        "transportation"
+      );
 
-  const email =
-    String(body.email || "")
-      .trim()
-      .toLowerCase();
+    case "business":
+      return countCategory(
+        player,
+        "business"
+      );
 
-  const password =
-    String(body.password || "");
+    case "investment_value":
+      return player.investmentValue || 0;
 
-  if (!username || !email || !password) {
-    return {
-      status: 400,
-      data: {
-        error:
-          "username, email and password are required"
-      }
-    };
+    case "military":
+      return militaryPower(player);
+
+    case "net_worth":
+      return calculateNetWorth(player);
+
+    default:
+      return 0;
   }
+}
 
-  if (
-    db.players.some(
-      p => p.email === email
-    )
-  ) {
-    return {
-      status: 409,
-      data: {
-        error:
-          "email already registered"
-      }
-    };
-  }
+function createMissions(player) {
+  for (const template of MISSION_TEMPLATES) {
+    const exists =
+      db.missions.some(
+        m =>
+          m.playerId === player.id &&
+          m.template === template.title
+      );
 
-  const player = {
-    id: db.nextPlayerId++,
-    username,
-    email,
-    password:
-      hashPassword(password),
-
-    companyName:
-      body.companyName ||
-      username + " Corporation",
-
-    country:
-      body.country ||
-      "India",
-
-    level: 1,
-    xp: 0,
-
-    cash: 100000,
-    gold: 100,
-
-    offensiveLevel: 1,
-    defense: 100,
-
-    patriotism: 0,
-    brandPoints: 0,
-    ceoPrestige: 0,
-
-    assets: [],
-
-    lastIncome:
-      Date.now()
-  };
-
-  db.players.push(player);
-
-  const token =
-    createToken();
-
-  db.sessions[token] =
-    player.id;
-
-  return {
-    status: 201,
-    data: {
-      ok: true,
-      token,
-      accessToken: token,
-      player:
-        playerView(player)
+    if (!exists) {
+      db.missions.push({
+        id: db.nextMissionId++,
+        playerId: player.id,
+        template: template.title,
+        title: template.title,
+        type: template.type,
+        target: template.target,
+        rewardCash: template.rewardCash,
+        rewardGold: template.rewardGold,
+        rewardXP: template.rewardXP,
+        completed: false
+      });
     }
-  };
+  }
 }
 
-/*
-=========================================================
-INCOME CYCLE
-=========================================================
-*/
+function processMissionRewards(
+  player
+) {
+  createMissions(player);
 
-function processIncome(player) {
-  const now =
-    Date.now();
+  const completed = [];
 
-  const hour =
-    60 * 60 * 1000;
+  for (
+    const mission of db.missions
+  ) {
+    if (
+      mission.playerId !== player.id ||
+      mission.completed
+    ) {
+      continue;
+    }
 
-  if (!player.lastIncome) {
-    player.lastIncome = now;
-    return 0;
+    const progress =
+      missionProgress(
+        player,
+        mission
+      );
+
+    if (
+      progress >=
+      mission.target
+    ) {
+      mission.completed = true;
+
+      player.cash +=
+        mission.rewardCash;
+
+      player.gold +=
+        mission.rewardGold;
+
+      player.xp +=
+        mission.rewardXP;
+
+      completed.push(mission);
+    }
   }
 
-  let cycles =
-    Math.floor(
-      (now - player.lastIncome) /
-        hour
-    );
-
-  cycles =
-    Math.max(
-      0,
-      Math.min(24, cycles)
-    );
-
-  if (cycles <= 0) {
-    return 0;
-  }
-
-  const gross =
-    calculateGrossIncome(player);
-
-  const maintenance =
-    calculateMaintenance(player);
-
-  const tax =
-    calculateTax(player);
-
-  const net =
-    Math.max(
-      0,
-      gross -
-        maintenance -
-        tax
-    );
-
-  const amount =
-    net * cycles;
-
-  player.cash += amount;
-
-  player.lastIncome +=
-    cycles * hour;
-
-  player.xp +=
-    Math.floor(
-      amount / 10000
-    );
-
-  tryLevelUp(player);
-
-  return amount;
+  return completed;
 }
 
-/*
-=========================================================
-SERVER
-=========================================================
-*/
+/* =========================================================
+   HTTP SERVER
+   ========================================================= */
 
 const server =
   http.createServer(
     async (req, res) => {
 
-      if (
-        req.method ===
-        "OPTIONS"
-      ) {
+      if (req.method === "OPTIONS") {
         return send(
           res,
           204,
@@ -930,11 +1267,9 @@ const server =
           ? await parseBody(req)
           : {};
 
-      /*
-      ================================================
-      HEALTH
-      ================================================
-      */
+      /* =====================================================
+         HEALTH
+         ===================================================== */
 
       if (
         req.method === "GET" &&
@@ -946,76 +1281,200 @@ const server =
           {
             ok: true,
             version: VERSION,
-            service:
-              "tycoon-empire",
-            players:
-              db.players.length,
-            assets:
-              db.assets.length,
-            sites:
-              db.sites.length,
-            contracts:
-              db.contracts.length,
+            service: "tycoon-empire",
+            players: db.players.length,
+            assets: db.assets.length,
             features: [
               "authentication",
               "players",
-              "progression",
+              "15-level-progression",
               "businesses",
               "transportation",
               "concessions",
               "subsidiaries",
               "investments",
               "properties",
+              "production",
               "resources",
-              "world-map",
+              "resource-sites",
+              "research",
+              "technology",
+              "mega-projects",
+              "missions",
+              "loans",
               "contracts",
-              "bidding",
               "alliances",
               "chat",
               "rankings",
               "army",
+              "military-units",
               "wars",
-              "income-cycles",
-              "loans",
-              "missions",
-              "countries"
+              "country-economy"
             ]
           }
         );
       }
 
-      /*
-      ================================================
-      REGISTER
-      ================================================
-      */
+      /* =====================================================
+         REGISTER
+         ===================================================== */
 
       if (
         req.method === "POST" &&
-        path ===
-          "/api/auth/register"
+        path === "/api/auth/register"
       ) {
 
-        const result =
-          register(body);
+        const username =
+          String(
+            body.username || ""
+          ).trim();
+
+        const email =
+          String(
+            body.email || ""
+          )
+            .trim()
+            .toLowerCase();
+
+        const password =
+          String(
+            body.password || ""
+          );
+
+        if (
+          !username ||
+          !email ||
+          !password
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "username, email and password are required"
+            }
+          );
+        }
+
+        if (password.length < 4) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "password must contain at least 4 characters"
+            }
+          );
+        }
+
+        if (
+          db.players.some(
+            p =>
+              p.email === email
+          )
+        ) {
+          return send(
+            res,
+            409,
+            {
+              error:
+                "email already registered"
+            }
+          );
+        }
+
+        if (
+          db.players.some(
+            p =>
+              p.username.toLowerCase() ===
+              username.toLowerCase()
+          )
+        ) {
+          return send(
+            res,
+            409,
+            {
+              error:
+                "username already exists"
+            }
+          );
+        }
+
+        const player = {
+          id:
+            db.nextPlayerId++,
+
+          username,
+          email,
+          password:
+            hashPassword(password),
+
+          companyName:
+            username +
+            " Corporation",
+
+          country: "India",
+
+          level: 1,
+          xp: 0,
+
+          cash: 100000,
+          gold: 100,
+
+          ceoPrestige: 0,
+          patriotism: 0,
+          brandPoints: 0,
+
+          offensiveLevel: 1,
+          defense: 100,
+
+          alliedCountries: 0,
+          megaProjectsCompleted: 0,
+
+          investmentValue: 0,
+
+          assets: [],
+
+          research: {},
+
+          military: {},
+
+          createdAt:
+            new Date().toISOString()
+        };
+
+        for (
+          const unit of MILITARY_UNITS
+        ) {
+          player.military[
+            unit[0]
+          ] = 0;
+        }
+
+        db.players.push(player);
+
+        createMissions(player);
 
         return send(
           res,
-          result.status,
-          result.data
+          201,
+          {
+            ok: true,
+            message:
+              "account created",
+            player:
+              playerView(player)
+          }
         );
       }
 
-      /*
-      ================================================
-      LOGIN
-      ================================================
-      */
+      /* =====================================================
+         LOGIN
+         ===================================================== */
 
       if (
         req.method === "POST" &&
-        path ===
-          "/api/auth/login"
+        path === "/api/auth/login"
       ) {
 
         const email =
@@ -1035,9 +1494,7 @@ const server =
             p =>
               p.email === email &&
               p.password ===
-                hashPassword(
-                  password
-                )
+                hashPassword(password)
           );
 
         if (!player) {
@@ -1050,8 +1507,6 @@ const server =
             }
           );
         }
-
-        processIncome(player);
 
         const token =
           createToken();
@@ -1072,30 +1527,20 @@ const server =
         );
       }
 
-      /*
-      ================================================
-      LOGOUT
-      ================================================
-      */
+      /* =====================================================
+         LOGOUT
+         ===================================================== */
 
       if (
         req.method === "POST" &&
-        path ===
-          "/api/auth/logout"
+        path === "/api/auth/logout"
       ) {
 
-        const header =
-          req.headers.authorization ||
-          "";
+        const token =
+          getToken(req);
 
-        if (
-          header.startsWith(
-            "Bearer "
-          )
-        ) {
-          delete db.sessions[
-            header.substring(7)
-          ];
+        if (token) {
+          delete db.sessions[token];
         }
 
         return send(
@@ -1105,104 +1550,40 @@ const server =
         );
       }
 
-      /*
-      ================================================
-      PUBLIC COUNTRY LIST
-      ================================================
-      */
+      /* =====================================================
+         CURRENT PLAYER
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/countries"
+        path === "/api/players/me"
       ) {
 
-        const result =
-          COUNTRIES.map(
-            country => {
-
-              const companies =
-                db.players.filter(
-                  p =>
-                    p.country ===
-                    country
-                );
-
-              const totalWorth =
-                companies.reduce(
-                  (sum, p) =>
-                    sum +
-                    calculateNetWorth(
-                      p
-                    ),
-                  0
-                );
-
-              return {
-                name: country,
-                companies:
-                  companies.length,
-                totalNetWorth:
-                  totalWorth
-              };
-            }
+        const player =
+          requirePlayer(
+            req,
+            res
           );
 
-        return send(
-          res,
-          200,
-          {
-            countries:
-              result
-          }
-        );
-      }
+        if (!player) return;
 
-      /*
-      ================================================
-      AUTHENTICATED ROUTES
-      ================================================
-      */
-
-      const player =
-        requirePlayer(
-          req,
-          res
-        );
-
-      if (!player) {
-        return;
-      }
-
-      processIncome(player);
-
-      /*
-      ================================================
-      PLAYER
-      ================================================
-      */
-
-      if (
-        req.method === "GET" &&
-        path ===
-          "/api/players/me"
-      ) {
         return send(
           res,
           200,
           {
             player:
-              playerView(
-                player
-              )
+              playerView(player)
           }
         );
       }
 
+      /* =====================================================
+         ONLINE PLAYERS
+         ===================================================== */
+
       if (
         req.method === "GET" &&
-        path ===
-          "/api/players/online"
+        path === "/api/players/online"
       ) {
 
         return send(
@@ -1217,145 +1598,147 @@ const server =
         );
       }
 
-      /*
-      ================================================
-      PROGRESSION
-      ================================================
-      */
+      /* =====================================================
+         PROGRESSION
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/progression"
+        path === "/api/progression"
       ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const info =
+          levelInfo(player);
+
+        const requirements =
+          info.next
+            ? checkLevelRequirements(
+                player,
+                info.next
+              )
+            : {
+                eligible: false,
+                reasons: [
+                  "Maximum level reached."
+                ]
+              };
 
         return send(
           res,
           200,
           {
             player:
-              playerView(
-                player
-              ),
-            levels: LEVELS,
+              playerView(player),
+
             current:
-              levelInfo(
-                player
-              )
+              info.current,
+
+            next:
+              info.next,
+
+            requirements,
+
+            levels:
+              LEVELS
           }
         );
       }
 
-      /*
-      ================================================
-      ASSET CATALOG
-      ================================================
-      */
+      /* =====================================================
+         ASSETS
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/assets"
+        path === "/api/assets"
       ) {
 
-        const category =
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        let category =
           String(
             url.searchParams.get(
               "category"
             ) || ""
-          );
-
-        let normalizedCategory =
-          normalize(
-            category
-          );
+          ).trim();
 
         const aliases = {
-          concessions:
-            "concession",
-          concession:
-            "concession",
-          subsidiaries:
-            "subsidiary",
-          subsidiary:
-            "subsidiary",
-          investments:
-            "investment",
-          investment:
-            "investment",
-          businesses:
-            "business",
-          business:
-            "business",
-          transportation:
-            "transportation",
-          properties:
-            "property",
-          property:
-            "property",
-          resources:
-            "resource",
-          resource:
-            "resource",
-          production:
-            "production",
-          research:
-            "research"
+          businesses: "business",
+          concessions: "concession",
+          subsidiaries: "subsidiary",
+          properties: "property",
+          resources: "resource",
+          investments: "investment",
+          production: "production",
+          transportation: "transportation"
         };
 
-        normalizedCategory =
+        category =
           aliases[
-            normalizedCategory
-          ] ||
-          normalizedCategory;
+            category.toLowerCase()
+          ] || category;
 
-        let assets =
-          db.assets;
-
-        if (
-          normalizedCategory
-        ) {
-          assets =
-            assets.filter(
-              a =>
-                a.category ===
-                normalizedCategory
-            );
-        }
+        const assets =
+          category
+            ? db.assets.filter(
+                a =>
+                  a.category.toLowerCase() ===
+                  category.toLowerCase()
+              )
+            : db.assets;
 
         return send(
           res,
           200,
           {
-            assets:
-              assets,
+            assets,
             owned:
               player.assets || []
           }
         );
       }
 
-      /*
-      ================================================
-      BUY
-      ================================================
-      */
+      /* =====================================================
+         BUY
+         ===================================================== */
 
       if (
         req.method === "POST" &&
-        path ===
-          "/api/assets/buy"
+        path === "/api/assets/buy"
       ) {
 
-        const requested =
-          body.type ||
-          body.assetType ||
-          body.name;
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const type =
+          String(
+            body.type ||
+            body.assetType ||
+            body.name ||
+            ""
+          ).trim();
 
         const asset =
-          findAsset(
-            requested
-          );
+          findAsset(type);
 
         if (!asset) {
           return send(
@@ -1363,163 +1746,7 @@ const server =
             404,
             {
               error:
-                "asset not found",
-              requestedType:
-                requested
-            }
-          );
-        }
-
-        let quantity =
-          Number(
-            body.quantity || 1
-          );
-
-        quantity =
-          Math.floor(
-            quantity
-          );
-
-        if (
-          !Number.isFinite(
-            quantity
-          ) ||
-          quantity < 1
-        ) {
-          quantity = 1;
-        }
-
-        if (
-          quantity > 100000
-        ) {
-          return send(
-            res,
-            400,
-            {
-              error:
-                "quantity too large"
-            }
-          );
-        }
-
-        const cost =
-          asset.price *
-          quantity;
-
-        if (
-          player.cash <
-          cost
-        ) {
-          return send(
-            res,
-            400,
-            {
-              error:
-                "insufficient cash",
-              cash:
-                player.cash,
-              cost
-            }
-          );
-        }
-
-        player.cash -= cost;
-
-        if (!player.assets) {
-          player.assets = [];
-        }
-
-        const existing =
-          player.assets.find(
-            x =>
-              normalize(
-                x.type
-              ) ===
-              normalize(
-                asset.type
-              )
-          );
-
-        if (existing) {
-          existing.quantity +=
-            quantity;
-        } else {
-          player.assets.push({
-            type:
-              asset.type,
-            quantity
-          });
-        }
-
-        player.xp +=
-          Math.max(
-            1,
-            Math.floor(
-              cost / 10000
-            )
-          );
-
-        const levels =
-          tryLevelUp(
-            player
-          );
-
-        return send(
-          res,
-          200,
-          {
-            ok: true,
-            asset,
-            quantity,
-            cost,
-            cash:
-              player.cash,
-            levelUps:
-              levels,
-            player:
-              playerView(
-                player
-              )
-          }
-        );
-      }
-
-      /*
-      ================================================
-      SELL
-      ================================================
-      */
-
-      if (
-        req.method === "POST" &&
-        path ===
-          "/api/assets/sell"
-      ) {
-
-        const requested =
-          body.type ||
-          body.assetType ||
-          body.name;
-
-        const owned =
-          (player.assets || [])
-            .find(
-              x =>
-                normalize(
-                  x.type
-                ) ===
-                normalize(
-                  requested
-                )
-            );
-
-        if (!owned) {
-          return send(
-            res,
-            404,
-            {
-              error:
-                "asset not owned"
+                "asset not found"
             }
           );
         }
@@ -1540,24 +1767,197 @@ const server =
           quantity = 1;
         }
 
+        if (quantity > 100000) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "quantity too large"
+            }
+          );
+        }
+
+        const cost =
+          asset.price *
+          quantity;
+
         if (
-          quantity >
-          owned.quantity
+          player.cash < cost
         ) {
           return send(
             res,
             400,
             {
               error:
-                "not enough units"
+                "insufficient cash",
+              cash:
+                player.cash,
+              cost
             }
           );
         }
 
+        player.cash -= cost;
+
+        if (!player.assets) {
+          player.assets = [];
+        }
+
+        const owned =
+          player.assets.find(
+            x =>
+              normalizeType(
+                x.type
+              ) ===
+              normalizeType(
+                asset.type
+              )
+          );
+
+        if (owned) {
+          owned.quantity +=
+            quantity;
+        } else {
+          player.assets.push({
+            type:
+              asset.type,
+            quantity
+          });
+        }
+
+        player.xp +=
+          Math.max(
+            1,
+            Math.floor(
+              cost / 10000
+            )
+          );
+
+        if (
+          asset.category ===
+          "investment"
+        ) {
+          player.investmentValue =
+            Number(
+              player.investmentValue ||
+                0
+            ) + cost;
+        }
+
+        player.brandPoints +=
+          asset.category ===
+          "business"
+            ? Math.max(
+                1,
+                Math.floor(
+                  quantity / 2
+                )
+              )
+            : 0;
+
+        const levelUp =
+          tryLevelUp(player);
+
+        const missions =
+          processMissionRewards(
+            player
+          );
+
+        return send(
+          res,
+          200,
+          {
+            ok: true,
+            message:
+              "purchase successful",
+            asset,
+            quantity,
+            cost,
+            cash:
+              player.cash,
+            levelUp,
+            missions,
+            player:
+              playerView(player)
+          }
+        );
+      }
+
+      /* =====================================================
+         SELL
+         ===================================================== */
+
+      if (
+        req.method === "POST" &&
+        path === "/api/assets/sell"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
         const asset =
           findAsset(
-            owned.type
+            body.type ||
+            body.assetType ||
+            body.name
           );
+
+        if (!asset) {
+          return send(
+            res,
+            404,
+            {
+              error:
+                "asset not found"
+            }
+          );
+        }
+
+        const quantity =
+          Math.max(
+            1,
+            Math.floor(
+              Number(
+                body.quantity || 1
+              )
+            )
+          );
+
+        const owned =
+          player.assets.find(
+            x =>
+              normalizeType(
+                x.type
+              ) ===
+              normalizeType(
+                asset.type
+              )
+          );
+
+        if (
+          !owned ||
+          owned.quantity <
+            quantity
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "asset not owned",
+              owned:
+                owned
+                  ? owned.quantity
+                  : 0
+            }
+          );
+        }
 
         const value =
           Math.floor(
@@ -1575,106 +1975,47 @@ const server =
           player.assets =
             player.assets.filter(
               x =>
-                x !== owned
+                normalizeType(
+                  x.type
+                ) !==
+                normalizeType(
+                  asset.type
+                )
             );
         }
 
-        player.cash +=
-          value;
+        player.cash += value;
 
         return send(
           res,
           200,
           {
             ok: true,
-            sold:
-              quantity,
             value,
             cash:
               player.cash,
             player:
-              playerView(
-                player
-              )
+              playerView(player)
           }
         );
       }
 
-      /*
-      ================================================
-      COLLECT INCOME
-      ================================================
-      */
-
-      if (
-        req.method === "POST" &&
-        path ===
-          "/api/assets/collect"
-      ) {
-
-        const gross =
-          calculateGrossIncome(
-            player
-          );
-
-        const maintenance =
-          calculateMaintenance(
-            player
-          );
-
-        const tax =
-          calculateTax(
-            player
-          );
-
-        const income =
-          Math.max(
-            0,
-            gross -
-              maintenance -
-              tax
-          );
-
-        player.cash +=
-          income;
-
-        player.xp +=
-          Math.floor(
-            income / 1000
-          );
-
-        const levelUps =
-          tryLevelUp(
-            player
-          );
-
-        return send(
-          res,
-          200,
-          {
-            ok: true,
-            gross,
-            maintenance,
-            tax,
-            income,
-            cash:
-              player.cash,
-            levelUps
-          }
-        );
-      }
-
-      /*
-      ================================================
-      INCOME SNAPSHOT
-      ================================================
-      */
+      /* =====================================================
+         INCOME
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/income"
+        path === "/api/income"
       ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
 
         return send(
           res,
@@ -1684,45 +2025,213 @@ const server =
               calculateGrossIncome(
                 player
               ),
+
             maintenance:
               calculateMaintenance(
                 player
               ),
+
             tax:
               calculateTax(
                 player
               ),
+
             netIncome:
-              Math.max(
-                0,
-                calculateGrossIncome(
-                  player
-                ) -
-                  calculateMaintenance(
-                    player
-                  ) -
-                  calculateTax(
-                    player
-                  )
+              calculateNetIncome(
+                player
               ),
+
             cycle:
               "1 hour",
-            maxOfflineCycles:
-              24
+
+            maxOfflineCycles: 24
           }
         );
       }
 
-      /*
-      ================================================
-      WORLD MAP
-      ================================================
-      */
+      if (
+        req.method === "POST" &&
+        path === "/api/assets/collect"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const income =
+          calculateNetIncome(
+            player
+          );
+
+        player.cash += income;
+
+        player.xp +=
+          Math.max(
+            1,
+            Math.floor(
+              income / 10000
+            )
+          );
+
+        const missions =
+          processMissionRewards(
+            player
+          );
+
+        tryLevelUp(player);
+
+        return send(
+          res,
+          200,
+          {
+            ok: true,
+            income,
+            cash:
+              player.cash,
+            missions,
+            player:
+              playerView(player)
+          }
+        );
+      }
+
+      /* =====================================================
+         COUNTRIES
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/world/sites"
+        path === "/api/countries"
+      ) {
+
+        const countries =
+          COUNTRY_NAMES.map(
+            name => {
+
+              const companies =
+                db.players.filter(
+                  p =>
+                    p.country ===
+                    name
+                );
+
+              return {
+                name,
+
+                companies:
+                  companies.length,
+
+                totalNetWorth:
+                  companies.reduce(
+                    (
+                      sum,
+                      p
+                    ) =>
+                      sum +
+                      calculateNetWorth(
+                        p
+                      ),
+                    0
+                  ),
+
+                totalMilitaryPower:
+                  companies.reduce(
+                    (
+                      sum,
+                      p
+                    ) =>
+                      sum +
+                      militaryPower(
+                        p
+                      ),
+                    0
+                  ),
+
+                investment:
+                  companies.reduce(
+                    (
+                      sum,
+                      p
+                    ) =>
+                      sum +
+                      Number(
+                        p.investmentValue ||
+                          0
+                      ),
+                    0
+                  )
+              };
+            }
+          );
+
+        return send(
+          res,
+          200,
+          {
+            countries
+          }
+        );
+      }
+
+      if (
+        req.method === "POST" &&
+        path === "/api/countries/select"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const country =
+          String(
+            body.country || ""
+          ).trim();
+
+        if (
+          !COUNTRY_NAMES.includes(
+            country
+          )
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "country not available"
+            }
+          );
+        }
+
+        player.country =
+          country;
+
+        return send(
+          res,
+          200,
+          {
+            ok: true,
+            country,
+            player:
+              playerView(player)
+          }
+        );
+      }
+
+      /* =====================================================
+         WORLD SITES
+         ===================================================== */
+
+      if (
+        req.method === "GET" &&
+        path === "/api/world/sites"
       ) {
 
         return send(
@@ -1735,17 +2244,18 @@ const server =
         );
       }
 
-      /*
-      ================================================
-      CLAIM WORLD SITE
-      ================================================
-      */
-
       if (
         req.method === "POST" &&
-        path ===
-          "/api/world/sites/claim"
+        path === "/api/world/sites/claim"
       ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
 
         const site =
           db.sites.find(
@@ -1782,34 +2292,29 @@ const server =
           );
         }
 
+        const fee =
+          100000;
+
         if (
-          player.cash <
-          site.claimFee
+          player.cash < fee
         ) {
           return send(
             res,
             400,
             {
               error:
-                "insufficient cash",
-              required:
-                site.claimFee
+                "need $100,000 claim fee"
             }
           );
         }
 
-        player.cash -=
-          site.claimFee;
+        player.cash -= fee;
 
         site.ownerId =
           player.id;
 
-        player.xp += 500;
-
-        const levelUps =
-          tryLevelUp(
-            player
-          );
+        player.xp += 250;
+        player.patriotism += 2;
 
         return send(
           res,
@@ -1819,255 +2324,98 @@ const server =
             site,
             cash:
               player.cash,
-            levelUps
+            player:
+              playerView(player)
           }
         );
       }
 
-      /*
-      ================================================
-      COUNTRIES
-      ================================================
-      */
+      /* =====================================================
+         RESEARCH
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/countries"
+        path === "/api/research"
       ) {
 
-        const countries =
-          COUNTRIES.map(
-            name => {
-
-              const companies =
-                db.players.filter(
-                  p =>
-                    p.country ===
-                    name
-                );
-
-              return {
-                name,
-                companies:
-                  companies.length,
-                totalNetWorth:
-                  companies.reduce(
-                    (sum, p) =>
-                      sum +
-                      calculateNetWorth(
-                        p
-                      ),
-                    0
-                  ),
-                totalMilitaryPower:
-                  companies.reduce(
-                    (sum, p) =>
-                      sum +
-                      (p.ground || 0) +
-                      (p.air || 0) +
-                      (p.offensiveLevel || 1) *
-                        100,
-                    0
-                  )
-              };
-            }
+        const player =
+          requirePlayer(
+            req,
+            res
           );
+
+        if (!player) return;
 
         return send(
           res,
           200,
           {
-            countries
+            research:
+              RESEARCH_CATALOG.map(
+                item => ({
+                  ...item,
+                  level:
+                    Number(
+                      player.research[
+                        item.id
+                      ] || 0
+                    )
+                })
+              )
           }
         );
       }
 
-      /*
-      ================================================
-      CHANGE COUNTRY
-      ================================================
-      */
-
       if (
         req.method === "POST" &&
-        path ===
-          "/api/countries/select"
+        path === "/api/research/upgrade"
       ) {
 
-        const country =
-          String(
-            body.country || ""
+        const player =
+          requirePlayer(
+            req,
+            res
           );
 
-        if (
-          !COUNTRIES.includes(
-            country
-          )
-        ) {
+        if (!player) return;
+
+        const id =
+          String(
+            body.id ||
+            body.research ||
+            ""
+          );
+
+        const item =
+          RESEARCH_CATALOG.find(
+            x =>
+              x.id === id
+          );
+
+        if (!item) {
           return send(
             res,
-            400,
+            404,
             {
               error:
-                "invalid country"
+                "research not found"
             }
           );
         }
 
-        player.country =
-          country;
-
-        return send(
-          res,
-          200,
-          {
-            ok: true,
-            country:
-              player.country
-          }
-        );
-      }
-
-      /*
-      ================================================
-      RANKINGS
-      ================================================
-      */
-
-      if (
-        req.method === "GET" &&
-        path ===
-          "/api/rankings"
-      ) {
-
-        const sorted =
-          [...db.players]
-            .sort(
-              (a, b) =>
-                calculateNetWorth(b) -
-                calculateNetWorth(a)
-            )
-            .map(
-              (p, index) => ({
-                rank:
-                  index + 1,
-                playerId:
-                  p.id,
-                username:
-                  p.username,
-                companyName:
-                  p.companyName,
-                country:
-                  p.country,
-                level:
-                  p.level,
-                netWorth:
-                  calculateNetWorth(
-                    p
-                  ),
-                income:
-                  calculateGrossIncome(
-                    p
-                  ),
-                offensiveLevel:
-                  p.offensiveLevel
-              })
-            );
-
-        return send(
-          res,
-          200,
-          {
-            rankings:
-              sorted
-          }
-        );
-      }
-
-      /*
-      ================================================
-      ARMY
-      ================================================
-      */
-
-      if (
-        req.method === "GET" &&
-        path ===
-          "/api/army"
-      ) {
-
-        return send(
-          res,
-          200,
-          {
-            army: {
-              ground:
-                player.ground || 0,
-              air:
-                player.air || 0,
-              defense:
-                player.defense || 100,
-              offensiveLevel:
-                player.offensiveLevel || 1,
-              power:
-                (player.ground || 0) +
-                (player.air || 0) +
-                (player.offensiveLevel || 1) *
-                  100
-            }
-          }
-        );
-      }
-
-      /*
-      ================================================
-      ARMY UPGRADE
-      ================================================
-      */
-
-      if (
-        req.method === "POST" &&
-        path ===
-          "/api/army/upgrade"
-      ) {
-
-        const quantity =
-          Math.max(
-            1,
-            Math.min(
-              100000,
-              Math.floor(
-                Number(
-                  body.quantity || 1
-                )
-              )
-            )
+        const current =
+          Number(
+            player.research[id] ||
+              0
           );
 
-        const unit =
-          String(
-            body.unit ||
-              "ground"
-          ).toLowerCase();
-
-        const costs = {
-          ground: 500,
-          air: 2500,
-          defense: 750
-        };
-
-        const costPerUnit =
-          costs[unit] ||
-          costs.ground;
-
         const cost =
-          quantity *
-          costPerUnit;
+          item.cost *
+          (current + 1);
 
         if (
-          player.cash <
-          cost
+          player.cash < cost
         ) {
           return send(
             res,
@@ -2082,28 +2430,673 @@ const server =
           );
         }
 
-        player.cash -=
-          cost;
+        player.cash -= cost;
 
-        if (unit === "air") {
-          player.air =
-            (player.air || 0) +
-            quantity;
-        } else if (
-          unit === "defense"
-        ) {
-          player.defense =
-            (player.defense || 100) +
-            quantity;
-        } else {
-          player.ground =
-            (player.ground || 0) +
-            quantity;
-        }
+        player.research[id] =
+          current + 1;
 
         player.xp +=
+          item.xp;
+
+        if (
+          id === "business_ai"
+        ) {
+          player.brandPoints += 5;
+        }
+
+        return send(
+          res,
+          200,
+          {
+            ok: true,
+            research: item,
+            level:
+              player.research[id],
+            cost,
+            cash:
+              player.cash,
+            player:
+              playerView(player)
+          }
+        );
+      }
+
+      /* =====================================================
+         MEGA PROJECTS
+         ===================================================== */
+
+      if (
+        req.method === "GET" &&
+        path === "/api/mega-projects"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        return send(
+          res,
+          200,
+          {
+            projects:
+              MEGA_PROJECT_CATALOG.map(
+                project => {
+
+                  const existing =
+                    db.megaProjects.find(
+                      p =>
+                        p.playerId ===
+                          player.id &&
+                        p.projectId ===
+                          project.id
+                    );
+
+                  return {
+                    ...project,
+                    progress:
+                      existing
+                        ? existing.progress
+                        : 0,
+                    completed:
+                      existing
+                        ? existing.completed
+                        : false
+                  };
+                }
+              )
+          }
+        );
+      }
+
+      if (
+        req.method === "POST" &&
+        path === "/api/mega-projects/invest"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const project =
+          MEGA_PROJECT_CATALOG.find(
+            x =>
+              x.id ===
+              String(
+                body.projectId ||
+                body.id
+              )
+          );
+
+        if (!project) {
+          return send(
+            res,
+            404,
+            {
+              error:
+                "project not found"
+            }
+          );
+        }
+
+        if (
+          player.level <
+          project.requiredLevel
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                `requires level ${project.requiredLevel}`
+            }
+          );
+        }
+
+        let amount =
+          Number(
+            body.amount || 0
+          );
+
+        if (
+          !Number.isFinite(
+            amount
+          ) ||
+          amount <= 0
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "invalid investment"
+            }
+          );
+        }
+
+        amount =
+          Math.floor(amount);
+
+        if (
+          player.cash < amount
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "insufficient cash"
+            }
+          );
+        }
+
+        let record =
+          db.megaProjects.find(
+            p =>
+              p.playerId ===
+                player.id &&
+              p.projectId ===
+                project.id
+          );
+
+        if (!record) {
+          record = {
+            id:
+              db.nextMegaId++,
+            playerId:
+              player.id,
+            projectId:
+              project.id,
+            progress: 0,
+            completed: false
+          };
+
+          db.megaProjects.push(
+            record
+          );
+        }
+
+        if (record.completed) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "project already completed"
+            }
+          );
+        }
+
+        player.cash -= amount;
+
+        record.progress +=
+          amount;
+
+        if (
+          record.progress >=
+          project.cost
+        ) {
+          record.progress =
+            project.cost;
+
+          record.completed =
+            true;
+
+          player.cash +=
+            project.rewardCash;
+
+          player.gold +=
+            project.rewardGold;
+
+          player.megaProjectsCompleted++;
+
+          player.xp += 5000;
+        }
+
+        return send(
+          res,
+          200,
+          {
+            ok: true,
+            project,
+            progress:
+              record.progress,
+            completed:
+              record.completed,
+            cash:
+              player.cash,
+            player:
+              playerView(player)
+          }
+        );
+      }
+
+      /* =====================================================
+         MISSIONS
+         ===================================================== */
+
+      if (
+        req.method === "GET" &&
+        path === "/api/missions"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        createMissions(player);
+
+        return send(
+          res,
+          200,
+          {
+            missions:
+              db.missions
+                .filter(
+                  m =>
+                    m.playerId ===
+                    player.id
+                )
+                .map(
+                  m => ({
+                    ...m,
+                    progress:
+                      missionProgress(
+                        player,
+                        m
+                      )
+                  })
+                )
+          }
+        );
+      }
+
+      /* =====================================================
+         LOANS
+         ===================================================== */
+
+      if (
+        req.method === "GET" &&
+        path === "/api/loans"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        return send(
+          res,
+          200,
+          {
+            loans:
+              db.loans.filter(
+                l =>
+                  l.playerId ===
+                  player.id
+              )
+          }
+        );
+      }
+
+      if (
+        req.method === "POST" &&
+        (
+          path === "/api/loans" ||
+          path === "/api/loans/take"
+        )
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const amount =
           Math.floor(
-            quantity / 10
+            Number(
+              body.amount || 0
+            )
+          );
+
+        if (
+          !Number.isFinite(
+            amount
+          ) ||
+          amount <= 0
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "invalid loan amount"
+            }
+          );
+        }
+
+        const maximum =
+          Math.max(
+            100000,
+            calculateNetWorth(
+              player
+            ) * 0.5
+          );
+
+        if (
+          amount > maximum
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "loan exceeds your limit",
+              maximum
+            }
+          );
+        }
+
+        const loan = {
+          id:
+            db.nextLoanId++,
+          playerId:
+            player.id,
+          amount,
+          interestRate: 10,
+          remaining:
+            Math.floor(
+              amount * 1.10
+            ),
+          createdAt:
+            new Date().toISOString(),
+          paid: false
+        };
+
+        db.loans.push(loan);
+
+        player.cash += amount;
+
+        return send(
+          res,
+          200,
+          {
+            ok: true,
+            loan,
+            cash:
+              player.cash
+          }
+        );
+      }
+
+      if (
+        req.method === "POST" &&
+        path === "/api/loans/repay"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const loan =
+          db.loans.find(
+            l =>
+              l.id ===
+                Number(
+                  body.loanId
+                ) &&
+              l.playerId ===
+                player.id &&
+              !l.paid
+          );
+
+        if (!loan) {
+          return send(
+            res,
+            404,
+            {
+              error:
+                "loan not found"
+            }
+          );
+        }
+
+        let amount =
+          Math.floor(
+            Number(
+              body.amount ||
+              loan.remaining
+            )
+          );
+
+        amount =
+          Math.min(
+            amount,
+            loan.remaining
+          );
+
+        if (
+          player.cash < amount
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "insufficient cash"
+            }
+          );
+        }
+
+        player.cash -= amount;
+
+        loan.remaining -=
+          amount;
+
+        if (
+          loan.remaining <= 0
+        ) {
+          loan.remaining = 0;
+          loan.paid = true;
+        }
+
+        return send(
+          res,
+          200,
+          {
+            ok: true,
+            loan,
+            cash:
+              player.cash
+          }
+        );
+      }
+
+      /* =====================================================
+         MILITARY
+         ===================================================== */
+
+      if (
+        req.method === "GET" &&
+        path === "/api/army"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        return send(
+          res,
+          200,
+          {
+            army: {
+              units:
+                MILITARY_UNITS.map(
+                  unit => ({
+                    id: unit[0],
+                    name: unit[1],
+                    price: unit[2],
+                    attack: unit[3],
+                    defense: unit[4],
+                    quantity:
+                      Number(
+                        player.military[
+                          unit[0]
+                        ] || 0
+                      )
+                  })
+                ),
+
+              ground:
+                Number(
+                  player.military.soldiers ||
+                  0
+                ),
+
+              air:
+                Number(
+                  player.military.fighter_aircraft ||
+                  0
+                ),
+
+              defense:
+                armyDefense(player),
+
+              offensiveLevel:
+                player.offensiveLevel,
+
+              power:
+                militaryPower(player)
+            }
+          }
+        );
+      }
+
+      if (
+        req.method === "POST" &&
+        path === "/api/army/upgrade"
+      ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
+
+        const unitId =
+          String(
+            body.unit ||
+            body.type ||
+            "soldiers"
+          );
+
+        const unit =
+          MILITARY_UNITS.find(
+            x =>
+              x[0] === unitId
+          );
+
+        if (!unit) {
+          return send(
+            res,
+            404,
+            {
+              error:
+                "military unit not found"
+            }
+          );
+        }
+
+        const quantity =
+          Math.max(
+            1,
+            Math.floor(
+              Number(
+                body.quantity || 1
+              )
+            )
+          );
+
+        const cost =
+          unit[2] *
+          quantity;
+
+        if (
+          player.cash < cost
+        ) {
+          return send(
+            res,
+            400,
+            {
+              error:
+                "insufficient cash",
+              cost,
+              cash:
+                player.cash
+            }
+          );
+        }
+
+        player.cash -= cost;
+
+        player.military[
+          unit[0]
+        ] =
+          Number(
+            player.military[
+              unit[0]
+            ] || 0
+          ) + quantity;
+
+        player.xp +=
+          Math.max(
+            1,
+            Math.floor(
+              cost / 100000
+            )
+          );
+
+        if (
+          militaryPower(
+            player
+          ) >=
+          player.offensiveLevel *
+            1000
+        ) {
+          player.offensiveLevel++;
+        }
+
+        player.defense =
+          Math.max(
+            player.defense,
+            armyDefense(player)
           );
 
         return send(
@@ -2111,48 +3104,78 @@ const server =
           200,
           {
             ok: true,
+            unit:
+              unit[1],
+            quantity,
             cost,
-            cash:
-              player.cash,
             army: {
-              ground:
-                player.ground || 0,
-              air:
-                player.air || 0,
-              defense:
-                player.defense || 100,
               offensiveLevel:
-                player.offensiveLevel || 1
-            }
+                player.offensiveLevel,
+              defense:
+                armyDefense(player),
+              power:
+                militaryPower(player),
+              units:
+                player.military
+            },
+            cash:
+              player.cash
           }
         );
       }
 
-      /*
-      ================================================
-      WARS
-      ================================================
-      */
+      /* =====================================================
+         WARS
+         ===================================================== */
+
+      if (
+        req.method === "GET" &&
+        path === "/api/wars"
+      ) {
+
+        return send(
+          res,
+          200,
+          {
+            wars:
+              db.wars
+          }
+        );
+      }
 
       if (
         req.method === "POST" &&
-        path ===
-          "/api/wars"
+        (
+          path === "/api/wars" ||
+          path === "/api/wars/attack"
+        )
       ) {
+
+        const attacker =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!attacker) return;
+
+        const targetId =
+          Number(
+            body.targetPlayerId ||
+            body.targetId
+          );
 
         const target =
           db.players.find(
             p =>
               p.id ===
-              Number(
-                body.targetPlayerId
-              )
+              targetId
           );
 
         if (
           !target ||
           target.id ===
-            player.id
+            attacker.id
         ) {
           return send(
             res,
@@ -2164,48 +3187,47 @@ const server =
           );
         }
 
-        const attack =
-          (player.ground || 0) +
-          (player.air || 0) +
-          (player.offensiveLevel || 1) *
-            100;
+        const attackPower =
+          militaryPower(
+            attacker
+          ) +
+          attacker.offensiveLevel *
+            500;
 
-        const defense =
-          (target.defense || 100) +
-          (target.ground || 0) +
-          (target.air || 0);
+        const defensePower =
+          armyDefense(
+            target
+          );
 
         const roll =
-          0.85 +
+          0.8 +
           Math.random() *
-            0.3;
+            0.4;
 
-        const win =
-          attack * roll >=
-          defense;
+        const won =
+          attackPower *
+            roll >=
+          defensePower;
 
         const war = {
           id:
             db.nextWarId++,
           attackerId:
-            player.id,
+            attacker.id,
           targetId:
             target.id,
-          attackPower:
-            attack,
-          defensePower:
-            defense,
-          win,
+          attackPower,
+          defensePower,
+          win: won,
           createdAt:
-            Date.now()
+            new Date().toISOString()
         };
 
         db.wars.push(war);
 
-        if (win) {
-          player.offensiveLevel =
-            (player.offensiveLevel || 1) +
-            1;
+        if (won) {
+          attacker.offensiveLevel++;
+          attacker.patriotism += 2;
 
           const damage =
             Math.floor(
@@ -2219,47 +3241,50 @@ const server =
               target.cash -
                 damage
             );
-
-          player.xp +=
-            1000;
+        } else {
+          attacker.patriotism =
+            Math.max(
+              0,
+              attacker.patriotism -
+                1
+            );
         }
 
         return send(
           res,
           200,
           {
+            ok: true,
+
             result: {
-              win,
+              win: won,
               message:
-                win
+                won
                   ? "Victory! Offensive level increased."
                   : "Defeat. Rebuild your army."
             },
+
             war,
+
             army: {
-              ground:
-                player.ground || 0,
-              air:
-                player.air || 0,
-              defense:
-                player.defense || 100,
               offensiveLevel:
-                player.offensiveLevel || 1
+                attacker.offensiveLevel,
+              defense:
+                armyDefense(attacker),
+              power:
+                militaryPower(attacker)
             }
           }
         );
       }
 
-      /*
-      ================================================
-      CONTRACTS
-      ================================================
-      */
+      /* =====================================================
+         CONTRACTS
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/contracts"
+        path === "/api/contracts"
       ) {
 
         return send(
@@ -2276,21 +3301,40 @@ const server =
         );
       }
 
-      /*
-      ================================================
-      PLACE BID
-      ================================================
-      */
+      if (
+        req.method === "GET" &&
+        path === "/api/contracts/running"
+      ) {
+
+        return send(
+          res,
+          200,
+          {
+            contracts:
+              db.contracts.filter(
+                c =>
+                  c.status ===
+                  "running"
+              )
+          }
+        );
+      }
 
       if (
         req.method === "POST" &&
         (
-          path ===
-            "/api/contracts/bid" ||
-          path ===
-            "/api/contracts/bids"
+          path === "/api/contracts/bid" ||
+          path === "/api/contracts/bids"
         )
       ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
 
         const contract =
           db.contracts.find(
@@ -2314,70 +3358,61 @@ const server =
           );
         }
 
-        let bidAmount =
+        const amount =
           Number(
+            body.amount ||
             body.bidAmount ||
-              body.amount ||
-              body.bid
+            body.bid ||
+            0
           );
 
         if (
           !Number.isFinite(
-            bidAmount
+            amount
           ) ||
-          bidAmount <= 0
+          amount <= 0
         ) {
           return send(
             res,
             400,
             {
               error:
-                "invalid bid amount"
+                "invalid bid"
             }
           );
         }
 
-        const bid = {
-          id:
-            db.nextBidId++,
-          contractId:
-            contract.id,
+        if (!contract.bids) {
+          contract.bids = [];
+        }
+
+        contract.bids.push({
           playerId:
             player.id,
           username:
             player.username,
-          amount:
-            bidAmount,
+          amount,
           createdAt:
-            Date.now()
-        };
+            new Date().toISOString()
+        });
 
-        db.bids.push(bid);
-
-        const contractBids =
-          db.bids.filter(
-            b =>
-              b.contractId ===
-              contract.id
-          );
+        contract.bids.sort(
+          (a, b) =>
+            a.amount -
+            b.amount
+        );
 
         return send(
           res,
           200,
           {
             ok: true,
-            bid,
-            bids:
-              contractBids
+            message:
+              "bid submitted",
+            contract
           }
         );
       }
-
-      /*
-      ================================================
-      BID RANKING
-      ================================================
-      */
 
       if (
         req.method === "GET" &&
@@ -2389,78 +3424,48 @@ const server =
         )
       ) {
 
-        const rankings =
-          db.bids
-            .map(
-              b => ({
-                ...b,
-                rank: 0
-              })
-            )
-            .sort(
-              (a, b) =>
-                a.amount -
-                b.amount
-            );
+        const rankings = [];
 
-        rankings.forEach(
-          (x, i) =>
-            x.rank =
-              i + 1
+        for (
+          const contract of
+          db.contracts
+        ) {
+          for (
+            const bid of
+            contract.bids || []
+          ) {
+            rankings.push({
+              contractId:
+                contract.id,
+              contract:
+                contract.title,
+              ...bid
+            });
+          }
+        }
+
+        rankings.sort(
+          (a, b) =>
+            a.amount -
+            b.amount
         );
 
         return send(
           res,
           200,
           {
-            bids:
-              rankings,
             rankings
           }
         );
       }
 
-      /*
-      ================================================
-      RUNNING CONTRACTS
-      ================================================
-      */
+      /* =====================================================
+         ALLIANCES
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/contracts/running"
-      ) {
-
-        const running =
-          db.contracts.filter(
-            c =>
-              c.status ===
-                "running" &&
-              c.winnerId ===
-                player.id
-          );
-
-        return send(
-          res,
-          200,
-          {
-            contracts:
-              running
-          }
-        );
-      }
-
-      /*
-      ================================================
-      ALLIANCES
-      ================================================
-      */
-
-      if (
-        req.method === "GET" &&
-        path ===
-          "/api/alliances"
+        path === "/api/alliances"
       ) {
 
         return send(
@@ -2475,23 +3480,26 @@ const server =
 
       if (
         req.method === "POST" &&
-        path ===
-          "/api/alliances/create"
+        path === "/api/alliances/create"
       ) {
 
-        const name =
-          String(
-            body.name ||
-              ""
-          ).trim();
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
 
-        if (!name) {
+        if (!player) return;
+
+        if (
+          player.level < 4
+        ) {
           return send(
             res,
             400,
             {
               error:
-                "alliance name required"
+                "alliances require level 4"
             }
           );
         }
@@ -2499,14 +3507,18 @@ const server =
         const alliance = {
           id:
             db.nextAllianceId++,
-          name,
-          leaderId:
+          name:
+            String(
+              body.name ||
+              "New Alliance"
+            ),
+          ownerId:
             player.id,
           members: [
             player.id
           ],
           createdAt:
-            Date.now()
+            new Date().toISOString()
         };
 
         db.alliances.push(
@@ -2523,16 +3535,13 @@ const server =
         );
       }
 
-      /*
-      ================================================
-      CHAT
-      ================================================
-      */
+      /* =====================================================
+         CHAT
+         ===================================================== */
 
       if (
         req.method === "GET" &&
-        path ===
-          "/api/chat"
+        path === "/api/chat"
       ) {
 
         return send(
@@ -2540,23 +3549,27 @@ const server =
           200,
           {
             messages:
-              db.chat.slice(
-                -100
-              )
+              db.chat.slice(-100)
           }
         );
       }
 
       if (
         req.method === "POST" &&
-        path ===
-          "/api/chat"
+        path === "/api/chat"
       ) {
+
+        const player =
+          requirePlayer(
+            req,
+            res
+          );
+
+        if (!player) return;
 
         const message =
           String(
-            body.message ||
-              ""
+            body.message || ""
           ).trim();
 
         if (!message) {
@@ -2577,187 +3590,64 @@ const server =
             player.id,
           username:
             player.username,
-          message,
-          createdAt:
-            Date.now()
-        };
-
-        db.chat.push(
-          item
-        );
-
-        return send(
-          res,
-          200,
-          {
-            ok: true,
-            message:
-              item
-          }
-        );
-      }
-
-      /*
-      ================================================
-      LOANS
-      ================================================
-      */
-
-      if (
-        req.method === "GET" &&
-        path ===
-          "/api/loans"
-      ) {
-
-        return send(
-          res,
-          200,
-          {
-            loans:
-              db.loans.filter(
-                l =>
-                  l.playerId ===
-                  player.id
-              )
-          }
-        );
-      }
-
-      if (
-        req.method === "POST" &&
-        path ===
-          "/api/loans"
-      ) {
-
-        const amount =
-          Number(
-            body.amount || 0
-          );
-
-        if (
-          !Number.isFinite(
-            amount
-          ) ||
-          amount <= 0
-        ) {
-          return send(
-            res,
-            400,
-            {
-              error:
-                "invalid amount"
-            }
-          );
-        }
-
-        const loan = {
-          id:
-            db.nextLoanId++,
-          playerId:
-            player.id,
-          amount,
-          remaining:
-            Math.floor(
-              amount * 1.1
-            ),
-          status:
-            "active",
-          createdAt:
-            Date.now()
-        };
-
-        db.loans.push(
-          loan
-        );
-
-        player.cash +=
-          amount;
-
-        return send(
-          res,
-          200,
-          {
-            ok: true,
-            loan,
-            cash:
-              player.cash
-          }
-        );
-      }
-
-      /*
-      ================================================
-      MISSIONS
-      ================================================
-      */
-
-      if (
-        req.method === "GET" &&
-        path ===
-          "/api/missions"
-      ) {
-
-        const missions = [
-          {
-            id: 1,
-            title:
-              "Build your first business",
-            requirement:
-              "Own 1 asset",
-            rewardCash:
-              10000,
-            rewardXP:
-              100
-          },
-          {
-            id: 2,
-            title:
-              "Become a property owner",
-            requirement:
-              "Own a property",
-            rewardCash:
-              25000,
-            rewardXP:
-              250
-          },
-          {
-            id: 3,
-            title:
-              "Build your empire",
-            requirement:
-              "Reach $1,000,000 net worth",
-            rewardCash:
-              100000,
-            rewardXP:
+          message:
+            message.slice(
+              0,
               1000
-          },
+            ),
+          createdAt:
+            new Date().toISOString()
+        };
+
+        db.chat.push(item);
+
+        return send(
+          res,
+          201,
           {
-            id: 4,
-            title:
-              "Military Power",
-            requirement:
-              "Reach 1,000 army power",
-            rewardCash:
-              150000,
-            rewardXP:
-              1500
+            ok: true,
+            message: item
           }
-        ];
+        );
+      }
+
+      /* =====================================================
+         RANKINGS
+         ===================================================== */
+
+      if (
+        req.method === "GET" &&
+        path === "/api/rankings"
+      ) {
+
+        const rankings =
+          db.players
+            .map(playerView)
+            .sort(
+              (a, b) =>
+                b.netWorth -
+                a.netWorth
+            )
+            .map(
+              (player, index) => ({
+                rank:
+                  index + 1,
+                ...player
+              })
+            );
 
         return send(
           res,
           200,
           {
-            missions
+            rankings
           }
         );
       }
 
-      /*
-      ================================================
-      FALLBACK
-      ================================================
-      */
+      /* =====================================================
+         UNKNOWN ROUTE
+         ===================================================== */
 
       return send(
         res,
@@ -2775,13 +3665,7 @@ server.listen(
   PORT,
   () => {
     console.log(
-      "Tycoon Empire server running on port " +
-        PORT
-    );
-
-    console.log(
-      "Version: " +
-        VERSION
+      `Tycoon Empire ${VERSION} running on port ${PORT}`
     );
   }
 );
