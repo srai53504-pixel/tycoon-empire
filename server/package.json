@@ -1,5 +1,5 @@
 {
-  "name": "entrepreneur-private-server",
+  "name": "entrepreneur-empire-server",
   "version": "1.0.0",
   "private": true,
   "main": "server.js",
