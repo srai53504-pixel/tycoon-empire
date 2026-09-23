@@ -1,624 +1,894 @@
-'use strict';
+/**
+ * Entrepreneur-style private multiplayer server
+ * ------------------------------------------------
+ * This is an ORIGINAL backend implementation for a business/tycoon game.
+ * It does not contain or copy proprietary client/server code from the reference APK.
+ *
+ * Run:
+ *   npm install
+ *   npm start
+ *
+ * Environment:
+ *   PORT=8080
+ *   JWT_SECRET=change-this-secret
+ *   DATA_FILE=./data.json
+ *
+ * Main API:
+ *   POST /api/auth/register
+ *   POST /api/auth/login
+ *   GET  /api/player/me
+ *   POST /api/company
+ *   GET  /api/company
+ *   POST /api/business/buy
+ *   POST /api/business/sell
+ *   POST /api/transport/buy
+ *   POST /api/transport/sell
+ *   GET  /api/catalog
+ *   GET  /api/rankings
+ *   POST /api/contracts
+ *   POST /api/contracts/:id/complete
+ *   POST /api/alliance
+ *   POST /api/alliance/:id/join
+ *   GET  /api/chat/:channel
+ *
+ * WebSocket:
+ *   ws://HOST/ws?token=JWT
+ *
+ * NOTE:
+ * The supplied APK does not expose a documented public game API. Therefore
+ * this server uses a clean REST/WebSocket contract. An unmodified APK will
+ * only work with this server if its client already uses the same API contract.
+ * Otherwise the APK/client must be adapted to call these endpoints.
+ */
 
-const express = require('express');
-const cors = require('cors');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const fs = require('fs');
-const path = require('path');
+const express = require("express");
+const cors = require("cors");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const http = require("http");
+const { WebSocketServer } = require("ws");
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
 
-const PORT = Number(process.env.PORT) || 10000;
-const HOST = '0.0.0.0';
-const JWT_SECRET = process.env.JWT_SECRET || 'CHANGE_THIS_SECRET_IN_RENDER';
-const DATA_FILE = process.env.DATA_FILE || path.join('/tmp', 'entrepreneur-data.json');
+const PORT = Number(process.env.PORT || 8080);
+const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_ME_PRIVATE_SERVER_SECRET";
+const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, "data.json");
 
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: "1mb" }));
 
-function emptyDb() {
-  return {
-    users: [],
-    assets: [],
-    messages: [],
-    alliances: [],
-    contracts: [],
-    wars: [],
-    worldSites: []
-  };
-}
+/* ----------------------------- Game catalog ----------------------------- */
 
-function loadDb() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      const db = emptyDb();
-      fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
-      return db;
-    }
-    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    return { ...emptyDb(), ...parsed };
-  } catch (e) {
-    console.error('Database read error:', e);
-    return emptyDb();
+const CATALOG = {
+  businesses: {
+    restaurant: { name: "Restaurant", price: 10000, income: 500, cycle: 3600, maxLevel: 20 },
+    grocery: { name: "Grocery Store", price: 25000, income: 1200, cycle: 3600, maxLevel: 20 },
+    factory: { name: "Factory", price: 100000, income: 6000, cycle: 7200, maxLevel: 20 },
+    mall: { name: "Mall", price: 500000, income: 30000, cycle: 10800, maxLevel: 20 },
+    bar: { name: "Bar", price: 75000, income: 3500, cycle: 5400, maxLevel: 20 }
+  },
+  transports: {
+    taxi: { name: "Taxi", price: 15000, income: 750, cycle: 3600 },
+    bus: { name: "Bus", price: 75000, income: 4000, cycle: 5400 },
+    truck: { name: "Truck", price: 200000, income: 12000, cycle: 7200 },
+    cargo_ship: { name: "Cargo Ship", price: 1500000, income: 95000, cycle: 21600 },
+    airplane: { name: "Cargo Airplane", price: 5000000, income: 350000, cycle: 43200 }
+  },
+  concession: {
+    basic: { name: "Basic Concession", price: 250000, incomeMultiplier: 1.10 },
+    premium: { name: "Premium Concession", price: 1000000, incomeMultiplier: 1.25 },
+    elite: { name: "Elite Concession", price: 5000000, incomeMultiplier: 1.50 }
+  },
+  subsidiaries: {
+    local: { name: "Local Subsidiary", price: 1000000, incomeMultiplier: 1.20 },
+    regional: { name: "Regional Subsidiary", price: 5000000, incomeMultiplier: 1.50 },
+    global: { name: "Global Subsidiary", price: 25000000, incomeMultiplier: 2.00 }
   }
-}
-
-function saveDb(db) {
-  try {
-    const dir = path.dirname(DATA_FILE);
-    fs.mkdirSync(dir, { recursive: true });
-    const temp = DATA_FILE + '.tmp';
-    fs.writeFileSync(temp, JSON.stringify(db, null, 2));
-    fs.renameSync(temp, DATA_FILE);
-  } catch (e) {
-    console.error('Database write error:', e);
-  }
-}
-
-const catalog = {
-  business: [
-    { name: 'Pub', price: 200, category: 'Leisure', income: 10 },
-    { name: 'Dance club', price: 220, category: 'Leisure', income: 11 },
-    { name: 'Coffee shop', price: 150, category: 'Leisure', income: 7 },
-    { name: 'Restaurant', price: 220, category: 'Leisure', income: 11 },
-    { name: 'Movie theater', price: 350, category: 'Leisure', income: 17 },
-    { name: 'Mall', price: 500, category: 'Commerce', income: 25 },
-    { name: 'Clothes shop', price: 150, category: 'Commerce', income: 7 },
-    { name: 'Supermarket', price: 250, category: 'Commerce', income: 12 },
-    { name: 'Fast food', price: 150, category: 'Commerce', income: 7 },
-    { name: 'Living building', price: null, category: 'Real Estate', income: 0, requirement: 'Real Estate concession' },
-    { name: 'Office building', price: null, category: 'Real Estate', income: 0, requirement: 'Real Estate concession' }
-  ],
-
-  transportation: [
-    { name: 'Taxi', price: 100, category: 'Ground lines', income: 5 },
-    { name: 'Bus', price: 150, category: 'Ground lines', income: 7 },
-    { name: 'Train', price: 250, category: 'Ground lines', income: 12 },
-    { name: 'VIP Limousines', price: 500, category: 'Ground lines', income: 25 },
-    { name: 'Passengers plane', price: 800, category: 'Air lines', income: 40 },
-    { name: 'Cargo plane', price: 850, category: 'Air lines', income: 42 },
-    { name: 'Passengers ship', price: null, category: 'Sea lines', income: 0, requirement: 'Sea Lines concession' },
-    { name: 'Cargo ship', price: null, category: 'Sea lines', income: 0, requirement: 'Sea Lines concession' }
-  ],
-
-  concessions: [
-    { name: 'Ground Transport', price: 25000 },
-    { name: 'Commerce', price: 30000 },
-    { name: 'Leisure', price: 75000 },
-    { name: 'Air Lines', price: 150000 },
-    { name: 'Sea Lines', price: 400000 },
-    { name: 'Real Estate', price: 800000 },
-    { name: 'War Industry', price: 1000000 },
-    { name: 'Space', price: 2000000 },
-    { name: 'Robotics', price: 5000000 },
-    { name: 'Nuclear', price: 10000000 },
-    { name: 'Advanced war', price: 50000000 }
-  ],
-
-  resources: [
-    { name: 'Salt', price: 93 },
-    { name: 'Iron', price: 157 },
-    { name: 'Aluminum', price: 30 },
-    { name: 'Copper', price: 202 },
-    { name: 'Silver', price: 242 },
-    { name: 'Oil', price: 588 },
-    { name: 'Gold', price: 201 },
-    { name: 'Diamonds', price: 286 },
-    { name: 'Gems', price: 880 }
-  ],
-
-  subsidiaries: [
-    { name: 'Mining company', price: 15000 },
-    { name: 'Traveling company', price: 45000 },
-    { name: 'Soccer team', price: 30000 },
-    { name: 'Brokerage company', price: 300000 },
-    { name: 'Army experiments', price: 150000 },
-    { name: 'Robotics program', price: 350000 },
-    { name: 'Nuclear program', price: 500000 },
-    { name: 'Advanced medical', price: 35, currency: 'gold' },
-    { name: 'Space center', price: 35, currency: 'gold' }
-  ],
-
-  products: [
-    { name: 'Spa Products', price: 3025 },
-    { name: 'Silverware', price: 6490 },
-    { name: 'Remote Control Cars', price: 7150 },
-    { name: 'Gold Plated Watch', price: 9185 },
-    { name: "Iron Furniture's", price: 8992 },
-    { name: 'Cameras', price: 10835 },
-    { name: 'Diamonds Jewelery', price: 44000 },
-    { name: 'Gemstones', price: 29150 },
-    { name: 'luxury-jewelry', price: 44000 },
-    { name: 'Computers', price: 28875 },
-    { name: 'Smart-phones', price: 24420 },
-    { name: 'Gaming Consoles', price: 25575 },
-    { name: 'Family Cars', price: 40425 },
-    { name: 'Sports Cars', price: 49280 },
-    { name: 'Advanced Tactical Weapons', price: 67100 },
-    { name: 'Armored Vehicles', price: 66550 }
-  ]
 };
 
-function makeId() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+const LEVELS = Array.from({ length: 20 }, (_, i) => {
+  const level = i + 1;
+  return {
+    level,
+    xpRequired: Math.floor(1000 * Math.pow(level, 1.65)),
+    netWorthRequired: Math.floor(25000 * Math.pow(level, 1.85))
+  };
+});
+
+/* ------------------------------ Persistence ----------------------------- */
+
+const defaultDB = {
+  version: 1,
+  users: {},
+  companies: {},
+  contracts: {},
+  alliances: {},
+  chat: { global: [] }
+};
+
+function loadDB() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return structuredClone(defaultDB);
+    const raw = fs.readFileSync(DATA_FILE, "utf8");
+    const db = JSON.parse(raw);
+    return {
+      ...structuredClone(defaultDB),
+      ...db,
+      users: db.users || {},
+      companies: db.companies || {},
+      contracts: db.contracts || {},
+      alliances: db.alliances || {},
+      chat: db.chat || { global: [] }
+    };
+  } catch (e) {
+    console.error("Could not load database:", e.message);
+    return structuredClone(defaultDB);
+  }
 }
 
-function publicUser(user) {
+let db = loadDB();
+let saveTimer = null;
+
+function saveDB() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      const tmp = `${DATA_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+      fs.renameSync(tmp, DATA_FILE);
+    } catch (e) {
+      console.error("Database save failed:", e.message);
+    }
+  }, 250);
+}
+
+function id(prefix) {
+  return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
+}
+
+function now() {
+  return Date.now();
+}
+
+function cleanUser(user) {
+  if (!user) return null;
+  const { passwordHash, ...safe } = user;
+  return safe;
+}
+
+/* ------------------------------- Economics ------------------------------ */
+
+function calculateBusinessIncome(company, secondsElapsed) {
+  let total = 0;
+
+  for (const [type, owned] of Object.entries(company.businesses || {})) {
+    const item = CATALOG.businesses[type];
+    if (!item || !owned || owned.quantity <= 0) continue;
+
+    const cycles = Math.floor(secondsElapsed / item.cycle);
+    if (cycles <= 0) continue;
+
+    const levelMultiplier = 1 + ((owned.level || 1) - 1) * 0.10;
+    total += cycles * item.income * owned.quantity * levelMultiplier;
+  }
+
+  for (const [type, owned] of Object.entries(company.transports || {})) {
+    const item = CATALOG.transports[type];
+    if (!item || !owned || owned.quantity <= 0) continue;
+
+    const cycles = Math.floor(secondsElapsed / item.cycle);
+    if (cycles <= 0) continue;
+
+    total += cycles * item.income * owned.quantity;
+  }
+
+  const concession = CATALOG.concession[company.concession];
+  if (concession) total *= concession.incomeMultiplier;
+
+  const subsidiary = CATALOG.subsidiaries[company.subsidiary];
+  if (subsidiary) total *= subsidiary.incomeMultiplier;
+
+  return Math.floor(total);
+}
+
+function collectOfflineIncome(company) {
+  const t = now();
+  const elapsed = Math.max(0, Math.min(t - (company.lastIncomeAt || t), 7 * 24 * 3600 * 1000));
+  const income = calculateBusinessIncome(company, Math.floor(elapsed / 1000));
+
+  company.money += income;
+  company.totalIncome += income;
+  company.lastIncomeAt = t;
+
+  if (income > 0) {
+    company.xp += Math.floor(income / 100);
+    updateLevel(company);
+  }
+  return income;
+}
+
+function updateLevel(company) {
+  let level = company.level || 1;
+  while (
+    level < LEVELS.length &&
+    company.xp >= LEVELS[level].xpRequired
+  ) level++;
+
+  company.level = Math.min(level, LEVELS.length);
+}
+
+function netWorth(company) {
+  let value = company.money;
+
+  for (const [type, owned] of Object.entries(company.businesses || {})) {
+    const item = CATALOG.businesses[type];
+    if (item) value += item.price * (owned.quantity || 0);
+  }
+  for (const [type, owned] of Object.entries(company.transports || {})) {
+    const item = CATALOG.transports[type];
+    if (item) value += item.price * (owned.quantity || 0);
+  }
+
+  return Math.floor(value);
+}
+
+function getCompany(userId) {
+  return db.companies[userId] || null;
+}
+
+function publicCompany(company) {
+  if (!company) return null;
+  collectOfflineIncome(company);
+
   return {
-    id: user.id,
-    username: user.username,
-    cash: user.cash,
-    gold: user.gold,
-    level: user.level,
-    createdAt: user.createdAt
+    id: company.id,
+    ownerId: company.ownerId,
+    name: company.name,
+    country: company.country,
+    level: company.level,
+    xp: company.xp,
+    money: company.money,
+    totalIncome: company.totalIncome,
+    netWorth: netWorth(company),
+    businesses: company.businesses,
+    transports: company.transports,
+    concession: company.concession,
+    subsidiary: company.subsidiary,
+    contractsCompleted: company.contractsCompleted,
+    createdAt: company.createdAt
   };
+}
+
+/* -------------------------------- Auth --------------------------------- */
+
+function signToken(userId) {
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: "30d" });
 }
 
 function auth(req, res, next) {
-  const header = req.headers.authorization || '';
-  if (!header.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Authorization token required' });
-  }
-
   try {
-    req.user = jwt.verify(header.slice(7), JWT_SECRET);
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Missing Bearer token" });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = db.users[decoded.userId];
+    if (!user) return res.status(401).json({ error: "Invalid account" });
+
+    req.user = user;
     next();
   } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    return res.status(401).json({ error: "Invalid or expired token" });
   }
 }
 
-function findCatalogItem(name) {
-  for (const [category, items] of Object.entries(catalog)) {
-    const item = items.find(x => x.name.toLowerCase() === String(name).toLowerCase());
-    if (item) return { ...item, category };
-  }
-  return null;
+function requireCompany(req, res, next) {
+  const company = getCompany(req.user.id);
+  if (!company) return res.status(404).json({ error: "Create a company first" });
+  collectOfflineIncome(company);
+  req.company = company;
+  next();
 }
 
-function getUser(db, id) {
-  return db.users.find(u => u.id === id);
-}
+/* ------------------------------- Health -------------------------------- */
 
-function calculateIncome(db, userId) {
-  return db.assets
-    .filter(a => a.userId === userId)
-    .reduce((sum, a) => sum + Number(a.incomePerMinute || 0), 0);
-}
-
-function updateOfflineIncome(db, user) {
-  const now = Date.now();
-  const elapsedMinutes = Math.floor((now - Number(user.lastIncomeAt || now)) / 60000);
-
-  if (elapsedMinutes <= 0) return 0;
-
-  const perMinute = calculateIncome(db, user.id);
-  const earned = perMinute * elapsedMinutes;
-
-  user.cash += earned;
-  user.lastIncomeAt = now;
-
-  return earned;
-}
-
-/* ---------- Public routes ---------- */
-
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.json({
-    name: 'Entrepreneur Empire Multiplayer Server',
-    status: 'online',
-    version: '1.0.0'
-  });
-});
-
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    ok: true,
-    service: 'entrepreneur-empire',
-    uptime: process.uptime(),
+    name: "Entrepreneur Private Multiplayer Server",
+    status: "online",
+    version: "1.0.0",
     time: new Date().toISOString()
   });
 });
 
-app.get('/api/catalog', (req, res) => {
-  res.json(catalog);
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    players: Object.keys(db.users).length,
+    companies: Object.keys(db.companies).length,
+    time: new Date().toISOString()
+  });
 });
 
-/* ---------- Authentication ---------- */
+app.get("/api/catalog", (req, res) => {
+  res.json({ catalog: CATALOG, levels: LEVELS });
+});
 
-app.post('/api/auth/register', async (req, res) => {
+/* ------------------------------- Account -------------------------------- */
+
+app.post("/api/auth/register", async (req, res) => {
   try {
-    const username = String(req.body?.username || '').trim();
-    const password = String(req.body?.password || '');
+    const username = String(req.body.username || "").trim();
+    const password = String(req.body.password || "");
+    const country = String(req.body.country || "India").trim();
 
-    if (!/^[A-Za-z0-9_.-]{3,24}$/.test(username)) {
-      return res.status(400).json({
-        error: 'Username must be 3-24 characters and use letters, numbers, _, ., or -'
-      });
-    }
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(username))
+      return res.status(400).json({ error: "Username must be 3-24 letters/numbers/underscore" });
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must contain at least 6 characters' });
-    }
+    if (password.length < 6)
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
 
-    const db = loadDb();
+    const exists = Object.values(db.users).some(
+      u => u.username.toLowerCase() === username.toLowerCase()
+    );
+    if (exists) return res.status(409).json({ error: "Username already exists" });
 
-    if (db.users.some(u => u.username.toLowerCase() === username.toLowerCase())) {
-      return res.status(409).json({ error: 'Username already exists' });
-    }
+    const userId = id("usr");
+    const passwordHash = await bcrypt.hash(password, 10);
 
     const user = {
-      id: makeId(),
+      id: userId,
       username,
-      passwordHash: await bcrypt.hash(password, 10),
-      cash: 10000,
-      gold: 10,
-      level: 1,
-      createdAt: Date.now(),
-      lastIncomeAt: Date.now()
+      country,
+      passwordHash,
+      createdAt: now(),
+      lastLoginAt: now()
     };
 
-    db.users.push(user);
-    saveDb(db);
+    db.users[userId] = user;
+    saveDB();
 
-    const token = jwt.sign(
-      { id: user.id, username: user.username },
-      JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-
-    res.status(201).json({
-      token,
-      user: publicUser(user)
-    });
+    const token = signToken(userId);
+    res.json({ token, user: cleanUser(user) });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Registration failed' });
+    res.status(500).json({ error: "Registration failed" });
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const username = String(req.body?.username || '').trim();
-    const password = String(req.body?.password || '');
+app.post("/api/auth/login", async (req, res) => {
+  const username = String(req.body.username || "").trim();
+  const password = String(req.body.password || "");
 
-    const db = loadDb();
-    const user = db.users.find(u => u.username.toLowerCase() === username.toLowerCase());
-
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-      return res.status(401).json({ error: 'Invalid username or password' });
-    }
-
-    updateOfflineIncome(db, user);
-    saveDb(db);
-
-    const token = jwt.sign(
-      { id: user.id, username: user.username },
-      JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-
-    res.json({
-      token,
-      user: publicUser(user)
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Login failed' });
-  }
-});
-
-/* ---------- Player ---------- */
-
-app.get('/api/players/me', auth, (req, res) => {
-  const db = loadDb();
-  const user = getUser(db, req.user.id);
-
-  if (!user) return res.status(404).json({ error: 'Player not found' });
-
-  const earned = updateOfflineIncome(db, user);
-  saveDb(db);
-
-  res.json({
-    ...publicUser(user),
-    incomePerMinute: calculateIncome(db, user.id),
-    earnedSinceLastUpdate: earned,
-    assetCount: db.assets.filter(a => a.userId === user.id).length
-  });
-});
-
-app.get('/api/players/online', auth, (req, res) => {
-  const db = loadDb();
-
-  res.json({
-    players: db.users.map(publicUser),
-    count: db.users.length
-  });
-});
-
-/* ---------- Assets ---------- */
-
-app.get('/api/assets', auth, (req, res) => {
-  const db = loadDb();
-  const user = getUser(db, req.user.id);
-
-  if (!user) return res.status(404).json({ error: 'Player not found' });
-
-  updateOfflineIncome(db, user);
-  saveDb(db);
-
-  res.json({
-    catalog,
-    owned: db.assets.filter(a => a.userId === user.id)
-  });
-});
-
-app.post('/api/assets/buy', auth, (req, res) => {
-  const db = loadDb();
-  const user = getUser(db, req.user.id);
-
-  if (!user) return res.status(404).json({ error: 'Player not found' });
-
-  updateOfflineIncome(db, user);
-
-  const name = String(req.body?.assetName || '').trim();
-  const item = findCatalogItem(name);
-
-  if (!item) return res.status(404).json({ error: 'Asset not found' });
-
-  if (item.price === null) {
-    return res.status(400).json({
-      error: `Unlock required: ${item.requirement || 'required concession'}`
-    });
-  }
-
-  if (item.currency === 'gold') {
-    if (user.gold < item.price) {
-      return res.status(400).json({ error: 'Not enough gold' });
-    }
-
-    user.gold -= item.price;
-  } else {
-    if (user.cash < item.price) {
-      return res.status(400).json({ error: 'Not enough cash' });
-    }
-
-    user.cash -= item.price;
-  }
-
-  const asset = {
-    id: makeId(),
-    userId: user.id,
-    name: item.name,
-    category: item.category,
-    price: item.price,
-    currency: item.currency || 'cash',
-    incomePerMinute: Number(item.income || 0),
-    boughtAt: Date.now()
-  };
-
-  db.assets.push(asset);
-  saveDb(db);
-
-  res.status(201).json({
-    ok: true,
-    asset,
-    user: publicUser(user)
-  });
-});
-
-app.post('/api/assets/sell', auth, (req, res) => {
-  const db = loadDb();
-  const user = getUser(db, req.user.id);
-
-  const asset = db.assets.find(
-    a => a.id === req.body?.assetId && a.userId === user?.id
+  const user = Object.values(db.users).find(
+    u => u.username.toLowerCase() === username.toLowerCase()
   );
 
-  if (!asset) return res.status(404).json({ error: 'Asset not found' });
+  if (!user || !(await bcrypt.compare(password, user.passwordHash)))
+    return res.status(401).json({ error: "Invalid username or password" });
 
-  updateOfflineIncome(db, user);
-
-  const refund = Math.floor(Number(asset.price || 0) * 0.70);
-
-  if (asset.currency === 'gold') {
-    user.gold += refund;
-  } else {
-    user.cash += refund;
-  }
-
-  db.assets = db.assets.filter(a => a.id !== asset.id);
-  saveDb(db);
+  user.lastLoginAt = now();
+  saveDB();
 
   res.json({
-    ok: true,
-    refund,
-    user: publicUser(user)
+    token: signToken(user.id),
+    user: cleanUser(user),
+    company: publicCompany(getCompany(user.id))
   });
 });
 
-app.post('/api/assets/collect', auth, (req, res) => {
-  const db = loadDb();
-  const user = getUser(db, req.user.id);
-
-  if (!user) return res.status(404).json({ error: 'Player not found' });
-
-  const earned = updateOfflineIncome(db, user);
-  saveDb(db);
-
+app.get("/api/player/me", auth, (req, res) => {
   res.json({
-    ok: true,
-    amount: earned,
-    cash: user.cash,
-    incomePerMinute: calculateIncome(db, user.id)
+    user: cleanUser(req.user),
+    company: publicCompany(getCompany(req.user.id))
   });
 });
 
-/* ---------- Rankings ---------- */
+/* ------------------------------- Company -------------------------------- */
 
-app.get('/api/rankings', auth, (req, res) => {
-  const db = loadDb();
+app.post("/api/company", auth, (req, res) => {
+  if (getCompany(req.user.id))
+    return res.status(409).json({ error: "Company already exists" });
 
-  const rankings = db.users.map(user => {
-    const owned = db.assets.filter(a => a.userId === user.id);
+  const name = String(req.body.name || `${req.user.username} Corp`).trim();
+  if (name.length < 2 || name.length > 40)
+    return res.status(400).json({ error: "Company name must be 2-40 characters" });
 
-    return {
-      rank: 0,
-      username: user.username,
-      level: user.level,
-      cash: user.cash,
-      assets: owned.length,
-      companyValue: owned.reduce((s, a) => s + Number(a.price || 0), 0),
-      netWorth: user.cash + owned.reduce((s, a) => s + Number(a.price || 0), 0)
-    };
-  }).sort((a, b) => b.netWorth - a.netWorth);
+  const company = {
+    id: id("cmp"),
+    ownerId: req.user.id,
+    name,
+    country: req.user.country,
+    level: 1,
+    xp: 0,
+    money: 100000,
+    totalIncome: 0,
+    businesses: {},
+    transports: {},
+    concession: null,
+    subsidiary: null,
+    contractsCompleted: 0,
+    allianceId: null,
+    lastIncomeAt: now(),
+    createdAt: now()
+  };
 
-  rankings.forEach((x, i) => x.rank = i + 1);
+  db.companies[req.user.id] = company;
+  saveDB();
 
-  res.json(rankings);
+  res.status(201).json({ company: publicCompany(company) });
 });
 
-/* ---------- Alliances ---------- */
-
-app.get('/api/alliances', auth, (req, res) => {
-  res.json(loadDb().alliances);
+app.get("/api/company", auth, requireCompany, (req, res) => {
+  res.json({ company: publicCompany(req.company) });
 });
 
-app.get('/api/alliances/rankings', auth, (req, res) => {
-  const db = loadDb();
-
-  const result = db.alliances.map(a => ({
-    id: a.id,
-    name: a.name,
-    members: a.members.length
-  })).sort((a, b) => b.members - a.members);
-
-  res.json(result);
+app.get("/api/company/:ownerId", auth, (req, res) => {
+  const company = db.companies[req.params.ownerId];
+  if (!company) return res.status(404).json({ error: "Company not found" });
+  res.json({ company: publicCompany(company) });
 });
 
-app.post('/api/alliances', auth, (req, res) => {
-  const db = loadDb();
-  const name = String(req.body?.name || '').trim();
+/* ------------------------------ Businesses ------------------------------ */
 
-  if (name.length < 3 || name.length > 32) {
-    return res.status(400).json({ error: 'Alliance name must be 3-32 characters' });
+app.post("/api/business/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+
+  const item = CATALOG.businesses[type];
+  if (!item) return res.status(400).json({ error: "Unknown business type" });
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const cost = item.price * quantity;
+  if (req.company.money < cost)
+    return res.status(400).json({ error: "Insufficient funds", required: cost });
+
+  req.company.money -= cost;
+  req.company.businesses[type] ||= { quantity: 0, level: 1 };
+  req.company.businesses[type].quantity += quantity;
+  req.company.xp += Math.floor(cost / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company), purchased: { type, quantity, cost } });
+});
+
+app.post("/api/business/sell", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+  const item = CATALOG.businesses[type];
+  const owned = req.company.businesses[type];
+
+  if (!item || !owned) return res.status(400).json({ error: "Business not owned" });
+  if (quantity < 1 || quantity > owned.quantity)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const refund = Math.floor(item.price * quantity * 0.70);
+  owned.quantity -= quantity;
+  req.company.money += refund;
+  if (owned.quantity === 0) delete req.company.businesses[type];
+
+  saveDB();
+  res.json({ company: publicCompany(req.company), sold: { type, quantity, refund } });
+});
+
+app.post("/api/business/upgrade", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const owned = req.company.businesses[type];
+  const item = CATALOG.businesses[type];
+
+  if (!item || !owned) return res.status(400).json({ error: "Business not owned" });
+  if (owned.level >= item.maxLevel)
+    return res.status(400).json({ error: "Maximum business level reached" });
+
+  const upgradeCost = Math.floor(item.price * Math.pow(1.55, owned.level - 1));
+  if (req.company.money < upgradeCost)
+    return res.status(400).json({ error: "Insufficient funds", required: upgradeCost });
+
+  req.company.money -= upgradeCost;
+  owned.level++;
+  req.company.xp += Math.floor(upgradeCost / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company), upgradeCost });
+});
+
+/* ------------------------------ Transport ------------------------------- */
+
+app.post("/api/transport/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+  const item = CATALOG.transports[type];
+
+  if (!item) return res.status(400).json({ error: "Unknown transport type" });
+  if (quantity < 1 || quantity > 10000)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const cost = item.price * quantity;
+  if (req.company.money < cost)
+    return res.status(400).json({ error: "Insufficient funds", required: cost });
+
+  req.company.money -= cost;
+  req.company.transports[type] ||= { quantity: 0 };
+  req.company.transports[type].quantity += quantity;
+  req.company.xp += Math.floor(cost / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company), purchased: { type, quantity, cost } });
+});
+
+app.post("/api/transport/sell", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+  const item = CATALOG.transports[type];
+  const owned = req.company.transports[type];
+
+  if (!item || !owned) return res.status(400).json({ error: "Transport not owned" });
+  if (quantity < 1 || quantity > owned.quantity)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const refund = Math.floor(item.price * quantity * 0.70);
+  owned.quantity -= quantity;
+  req.company.money += refund;
+  if (owned.quantity === 0) delete req.company.transports[type];
+
+  saveDB();
+  res.json({ company: publicCompany(req.company), sold: { type, quantity, refund } });
+});
+
+/* ------------------------------- Upgrades -------------------------------- */
+
+app.post("/api/concession/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const item = CATALOG.concession[type];
+  if (!item) return res.status(400).json({ error: "Unknown concession" });
+  if (req.company.concession)
+    return res.status(400).json({ error: "Concession already owned" });
+  if (req.company.money < item.price)
+    return res.status(400).json({ error: "Insufficient funds" });
+
+  req.company.money -= item.price;
+  req.company.concession = type;
+  req.company.xp += Math.floor(item.price / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company) });
+});
+
+app.post("/api/subsidiary/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const item = CATALOG.subsidiaries[type];
+  if (!item) return res.status(400).json({ error: "Unknown subsidiary" });
+  if (req.company.subsidiary)
+    return res.status(400).json({ error: "Subsidiary already owned" });
+  if (req.company.money < item.price)
+    return res.status(400).json({ error: "Insufficient funds" });
+
+  req.company.money -= item.price;
+  req.company.subsidiary = type;
+  req.company.xp += Math.floor(item.price / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company) });
+});
+
+/* -------------------------------- Income -------------------------------- */
+
+app.post("/api/income/collect", auth, requireCompany, (req, res) => {
+  const before = req.company.money;
+  const income = collectOfflineIncome(req.company);
+  saveDB();
+
+  res.json({
+    collected: income,
+    moneyBefore: before,
+    moneyAfter: req.company.money,
+    company: publicCompany(req.company)
+  });
+});
+
+/* ------------------------------- Contracts ------------------------------- */
+
+function createContractForCompany(company) {
+  const idValue = id("ctr");
+  const difficulty = 1 + Math.floor(Math.random() * Math.max(1, company.level));
+  const reward = 5000 * difficulty * (1 + company.level * 0.10);
+
+  const contract = {
+    id: idValue,
+    companyId: company.id,
+    title: ["Supply Contract", "Transport Contract", "Retail Contract", "Industrial Contract"][
+      Math.floor(Math.random() * 4)
+    ],
+    difficulty,
+    reward: Math.floor(reward),
+    xp: Math.floor(reward / 100),
+    status: "open",
+    createdAt: now(),
+    expiresAt: now() + 24 * 3600 * 1000
+  };
+
+  db.contracts[idValue] = contract;
+  return contract;
+}
+
+app.get("/api/contracts", auth, requireCompany, (req, res) => {
+  const list = Object.values(db.contracts).filter(c =>
+    c.companyId === req.company.id && c.expiresAt > now()
+  );
+
+  while (list.length < 5) {
+    const c = createContractForCompany(req.company);
+    list.push(c);
   }
+
+  saveDB();
+  res.json({ contracts: list });
+});
+
+app.post("/api/contracts/:id/complete", auth, requireCompany, (req, res) => {
+  const contract = db.contracts[req.params.id];
+
+  if (!contract || contract.companyId !== req.company.id)
+    return res.status(404).json({ error: "Contract not found" });
+
+  if (contract.status !== "open")
+    return res.status(400).json({ error: "Contract is not open" });
+
+  if (contract.expiresAt < now())
+    return res.status(400).json({ error: "Contract expired" });
+
+  contract.status = "completed";
+  req.company.money += contract.reward;
+  req.company.xp += contract.xp;
+  req.company.contractsCompleted++;
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ contract, company: publicCompany(req.company) });
+});
+
+/* ------------------------------- Rankings -------------------------------- */
+
+app.get("/api/rankings", auth, (req, res) => {
+  const rankings = Object.values(db.companies)
+    .map(c => {
+      collectOfflineIncome(c);
+      return {
+        companyId: c.id,
+        ownerId: c.ownerId,
+        companyName: c.name,
+        ownerName: db.users[c.ownerId]?.username || "Unknown",
+        country: c.country,
+        level: c.level,
+        netWorth: netWorth(c)
+      };
+    })
+    .sort((a, b) => b.netWorth - a.netWorth)
+    .slice(0, 100);
+
+  saveDB();
+  res.json({ rankings });
+});
+
+/* ------------------------------- Alliances ------------------------------- */
+
+app.post("/api/alliance", auth, requireCompany, (req, res) => {
+  if (req.company.allianceId)
+    return res.status(400).json({ error: "Already in an alliance" });
+
+  const name = String(req.body.name || "").trim();
+  if (name.length < 2 || name.length > 30)
+    return res.status(400).json({ error: "Alliance name must be 2-30 characters" });
 
   const alliance = {
-    id: makeId(),
+    id: id("all"),
     name,
     ownerId: req.user.id,
     members: [req.user.id],
-    createdAt: Date.now()
+    createdAt: now()
   };
 
-  db.alliances.push(alliance);
-  saveDb(db);
+  db.alliances[alliance.id] = alliance;
+  req.company.allianceId = alliance.id;
+  saveDB();
 
-  res.status(201).json(alliance);
+  res.status(201).json({ alliance });
 });
 
-/* ---------- Chat ---------- */
-
-app.get('/api/chat', auth, (req, res) => {
-  const db = loadDb();
-  res.json(db.messages.slice(-100));
-});
-
-app.post('/api/chat', auth, (req, res) => {
-  const text = String(req.body?.text || '').trim();
-
-  if (!text || text.length > 500) {
-    return res.status(400).json({ error: 'Message must contain 1-500 characters' });
-  }
-
-  const db = loadDb();
-
-  const message = {
-    id: makeId(),
-    userId: req.user.id,
-    username: req.user.username,
-    text,
-    createdAt: Date.now()
-  };
-
-  db.messages.push(message);
-  db.messages = db.messages.slice(-1000);
-  saveDb(db);
-
-  res.status(201).json(message);
-});
-
-/* ---------- Contracts ---------- */
-
-app.get('/api/contracts', auth, (req, res) => {
-  res.json(loadDb().contracts);
-});
-
-app.get('/api/contracts/running', auth, (req, res) => {
-  res.json(loadDb().contracts.filter(c => c.status === 'running'));
-});
-
-app.get('/api/contracts/bids/ranking', auth, (req, res) => {
-  res.json([]);
-});
-
-/* ---------- Army / Wars ---------- */
-
-app.get('/api/army', auth, (req, res) => {
-  const db = loadDb();
-  res.json(db.assets.filter(a => a.userId === req.user.id && a.category === 'army'));
-});
-
-app.post('/api/army/upgrade', auth, (req, res) => {
+app.get("/api/alliances", auth, (req, res) => {
   res.json({
-    ok: true,
-    message: 'Army upgrade endpoint is active. Add your final army rules here.'
+    alliances: Object.values(db.alliances).map(a => ({
+      ...a,
+      memberCount: a.members.length
+    }))
   });
 });
 
-app.get('/api/wars', auth, (req, res) => {
-  res.json(loadDb().wars);
+app.post("/api/alliance/:id/join", auth, requireCompany, (req, res) => {
+  const alliance = db.alliances[req.params.id];
+  if (!alliance) return res.status(404).json({ error: "Alliance not found" });
+  if (req.company.allianceId) return res.status(400).json({ error: "Already in an alliance" });
+  if (alliance.members.length >= 50) return res.status(400).json({ error: "Alliance is full" });
+
+  alliance.members.push(req.user.id);
+  req.company.allianceId = alliance.id;
+  saveDB();
+
+  res.json({ alliance });
 });
 
-/* ---------- World ---------- */
+app.post("/api/alliance/leave", auth, requireCompany, (req, res) => {
+  if (!req.company.allianceId)
+    return res.status(400).json({ error: "Not in an alliance" });
 
-app.get('/api/world/sites', auth, (req, res) => {
-  res.json(loadDb().worldSites);
-});
-
-app.post('/api/world/sites/claim', auth, (req, res) => {
-  const db = loadDb();
-  const site = db.worldSites.find(s => s.id === req.body?.siteId);
-
-  if (!site) return res.status(404).json({ error: 'World site not found' });
-
-  if (site.ownerId && site.ownerId !== req.user.id) {
-    return res.status(409).json({ error: 'World site already claimed' });
+  const alliance = db.alliances[req.company.allianceId];
+  if (alliance) {
+    alliance.members = alliance.members.filter(x => x !== req.user.id);
+    if (alliance.ownerId === req.user.id && alliance.members.length) {
+      alliance.ownerId = alliance.members[0];
+    }
+    if (alliance.members.length === 0) delete db.alliances[alliance.id];
   }
 
-  site.ownerId = req.user.id;
-  saveDb(db);
+  req.company.allianceId = null;
+  saveDB();
 
-  res.json(site);
+  res.json({ ok: true });
 });
 
-/* ---------- Error handling ---------- */
+/* -------------------------------- Chat ---------------------------------- */
 
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Route not found',
-    method: req.method,
-    path: req.path
+function addChat(channel, user, message) {
+  db.chat[channel] ||= [];
+  const entry = {
+    id: id("msg"),
+    userId: user.id,
+    username: user.username,
+    message: String(message).slice(0, 500),
+    createdAt: now()
+  };
+
+  db.chat[channel].push(entry);
+  if (db.chat[channel].length > 200) db.chat[channel] = db.chat[channel].slice(-200);
+  return entry;
+}
+
+app.get("/api/chat/:channel", auth, (req, res) => {
+  const channel = String(req.params.channel || "global");
+  res.json({ messages: db.chat[channel] || [] });
+});
+
+app.post("/api/chat/:channel", auth, (req, res) => {
+  const channel = String(req.params.channel || "global").replace(/[^A-Za-z0-9_-]/g, "");
+  const message = String(req.body.message || "").trim();
+
+  if (!message) return res.status(400).json({ error: "Empty message" });
+
+  const entry = addChat(channel, req.user, message);
+  saveDB();
+
+  broadcast({
+    type: "chat",
+    channel,
+    message: entry
   });
+
+  res.json({ message: entry });
 });
 
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
+/* ------------------------------ Admin reset ------------------------------ */
+/* Keep this endpoint disabled unless an ADMIN_KEY is configured. */
+
+app.post("/api/admin/reset", (req, res) => {
+  const key = req.headers["x-admin-key"];
+  if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY)
+    return res.status(403).json({ error: "Admin reset disabled or unauthorized" });
+
+  db = structuredClone(defaultDB);
+  saveDB();
+  res.json({ ok: true });
 });
 
-app.listen(PORT, HOST, () => {
-  console.log(`Entrepreneur Empire server listening on http://${HOST}:${PORT}`);
+/* ------------------------------- WebSocket ------------------------------- */
+
+const sockets = new Set();
+
+function broadcast(payload) {
+  const text = JSON.stringify(payload);
+  for (const ws of sockets) {
+    if (ws.readyState === 1) {
+      try { ws.send(text); } catch {}
+    }
+  }
+}
+
+server.on("upgrade", (request, socket, head) => {
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  if (url.pathname !== "/ws") {
+    socket.destroy();
+    return;
+  }
+
+  const token = url.searchParams.get("token");
+  try {
+    const decoded = jwt.verify(token || "", JWT_SECRET);
+    const user = db.users[decoded.userId];
+    if (!user) throw new Error("invalid user");
+
+    wss.handleUpgrade(request, socket, head, ws => {
+      ws.user = user;
+      wss.emit("connection", ws, request);
+    });
+  } catch {
+    socket.destroy();
+  }
+});
+
+wss.on("connection", ws => {
+  sockets.add(ws);
+
+  ws.send(JSON.stringify({
+    type: "connected",
+    serverTime: now(),
+    user: cleanUser(ws.user),
+    company: publicCompany(getCompany(ws.user.id))
+  }));
+
+  ws.on("message", raw => {
+    try {
+      const packet = JSON.parse(raw.toString());
+
+      if (packet.type === "ping") {
+        ws.send(JSON.stringify({ type: "pong", serverTime: now() }));
+        return;
+      }
+
+      if (packet.type === "chat") {
+        const channel = String(packet.channel || "global").replace(/[^A-Za-z0-9_-]/g, "");
+        const message = String(packet.message || "").trim();
+        if (!message) return;
+
+        const entry = addChat(channel, ws.user, message);
+        saveDB();
+
+        broadcast({
+          type: "chat",
+          channel,
+          message: entry
+        });
+      }
+    } catch {
+      ws.send(JSON.stringify({ type: "error", error: "Invalid WebSocket packet" }));
+    }
+  });
+
+  ws.on("close", () => sockets.delete(ws));
+});
+
+/* --------------------------- Automatic income ---------------------------- */
+/*
+ * We do not add money every second. Instead, the company stores lastIncomeAt
+ * and income is calculated when the player reconnects/opens company data.
+ * This prevents a server restart from stopping passive income.
+ */
+
+setInterval(() => {
+  // Persist recent state periodically.
+  saveDB();
+}, 30000);
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Private game server running on 0.0.0.0:${PORT}`);
+  console.log(`Health: http://localhost:${PORT}/health`);
 });
