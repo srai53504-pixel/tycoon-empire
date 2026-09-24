@@ -842,7 +842,7 @@ app.all(['/RestSimulator','/RestSimulator/*'], (req,res)=>{
   try {
     switch(op){
       case 'RegisterUser': {
-        const idv=String(L.nextCompanyId++); const c=ensureLegacyCompany(idv,{company_name:qp(req,'company_name','New Company'),country:qp(req,'country','India'),money:num(req,'money',100000),net_worth:num(req,'net_worth',100000),level:num(req,'level',1),economy_level:num(req,'economy_level',1),offensive_level:num(req,'offensive_level',1),latitude:num(req,'latitude',0),longitude:num(req,'longitude',0)}); updateFromParams(c,req); saveDB(); ok(res,{company_id:Number(idv),id:Number(idv),company_id_string:idv,company_name:c.company_name,country:c.country}); break;
+        const idv=String(L.nextCompanyId++); const c=ensureLegacyCompany(idv,{company_name:qp(req,'company_name','New Company'),country:qp(req,'country','India'),money:num(req,'money',100000),net_worth:num(req,'net_worth',100000),level:num(req,'level',1),economy_level:num(req,'economy_level',1),offensive_level:num(req,'offensive_level',1),latitude:num(req,'latitude',0),longitude:num(req,'longitude',0)}); updateFromParams(c,req); saveDB(); ok(res,{ranking:Number(c.world_rank||1),total_companies:Object.keys(L.companies).length,compnay_id:Number(idv),referral_code:String(idv)}); break;
       }
       case 'getUserData': { const c=ensureLegacyCompany(qp(req,'company_id','0')); ok(res,{...legacyView(c)}); break; }
       case 'updateUserData': { const c=ensureLegacyCompany(qp(req,'company_id','0')); updateFromParams(c,req); saveDB(); ok(res,legacyView(c)); break; }
