@@ -1,2169 +1,987 @@
+/**
+ * Entrepreneur-style private multiplayer server
+ * ------------------------------------------------
+ * This is an ORIGINAL backend implementation for a business/tycoon game.
+ * It does not contain or copy proprietary client/server code from the reference APK.
+ *
+ * Run:
+ *   npm install
+ *   npm start
+ *
+ * Environment:
+ *   PORT=8080
+ *   JWT_SECRET=change-this-secret
+ *   DATA_FILE=./data.json
+ *
+ * Main API:
+ *   POST /api/auth/register
+ *   POST /api/auth/login
+ *   GET  /api/player/me
+ *   POST /api/company
+ *   GET  /api/company
+ *   POST /api/business/buy
+ *   POST /api/business/sell
+ *   POST /api/transport/buy
+ *   POST /api/transport/sell
+ *   GET  /api/catalog
+ *   GET  /api/rankings
+ *   POST /api/contracts
+ *   POST /api/contracts/:id/complete
+ *   POST /api/alliance
+ *   POST /api/alliance/:id/join
+ *   GET  /api/chat/:channel
+ *
+ * WebSocket:
+ *   ws://HOST/ws?token=JWT
+ *
+ * NOTE:
+ * The supplied APK does not expose a documented public game API. Therefore
+ * this server uses a clean REST/WebSocket contract. An unmodified APK will
+ * only work with this server if its client already uses the same API contract.
+ * Otherwise the APK/client must be adapted to call these endpoints.
+ */
+
 const express = require("express");
 const cors = require("cors");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const http = require("http");
+const { WebSocketServer } = require("ws");
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ noServer: true });
 
-const PORT = process.env.PORT || 8080;
-const HOST = "0.0.0.0";
-const JWT_SECRET =
-  process.env.JWT_SECRET || "tycoon-empire-change-this-secret";
-
-const DATA_FILE = path.join(__dirname, "data.json");
+const PORT = Number(process.env.PORT || 8080);
+const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_ME_PRIVATE_SERVER_SECRET";
+const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, "data.json");
 
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "1mb" }));
 
-/* =========================================================
-   DATABASE
-   ========================================================= */
+/* ----------------------------- Game catalog ----------------------------- */
 
-function defaultDatabase() {
+const CATALOG = {
+  businesses: {
+    restaurant: { name: "Restaurant", price: 10000, income: 500, cycle: 3600, maxLevel: 20 },
+    grocery: { name: "Grocery Store", price: 25000, income: 1200, cycle: 3600, maxLevel: 20 },
+    factory: { name: "Factory", price: 100000, income: 6000, cycle: 7200, maxLevel: 20 },
+    mall: { name: "Mall", price: 500000, income: 30000, cycle: 10800, maxLevel: 20 },
+    bar: { name: "Bar", price: 75000, income: 3500, cycle: 5400, maxLevel: 20 }
+  },
+  transports: {
+    taxi: { name: "Taxi", price: 15000, income: 750, cycle: 3600 },
+    bus: { name: "Bus", price: 75000, income: 4000, cycle: 5400 },
+    truck: { name: "Truck", price: 200000, income: 12000, cycle: 7200 },
+    cargo_ship: { name: "Cargo Ship", price: 1500000, income: 95000, cycle: 21600 },
+    airplane: { name: "Cargo Airplane", price: 5000000, income: 350000, cycle: 43200 }
+  },
+  concession: {
+    basic: { name: "Basic Concession", price: 250000, incomeMultiplier: 1.10 },
+    premium: { name: "Premium Concession", price: 1000000, incomeMultiplier: 1.25 },
+    elite: { name: "Elite Concession", price: 5000000, incomeMultiplier: 1.50 }
+  },
+  subsidiaries: {
+    local: { name: "Local Subsidiary", price: 1000000, incomeMultiplier: 1.20 },
+    regional: { name: "Regional Subsidiary", price: 5000000, incomeMultiplier: 1.50 },
+    global: { name: "Global Subsidiary", price: 25000000, incomeMultiplier: 2.00 }
+  }
+};
+
+const LEVELS = Array.from({ length: 20 }, (_, i) => {
+  const level = i + 1;
   return {
-    users: [],
-    companies: [],
-    alliances: [],
-    chats: [],
-    countryChats: [],
-    bids: [],
-    donations: [],
-    resolutions: [],
-    wars: [],
-    armyAttacks: []
+    level,
+    xpRequired: Math.floor(1000 * Math.pow(level, 1.65)),
+    netWorthRequired: Math.floor(25000 * Math.pow(level, 1.85))
   };
-}
+});
 
-function loadDatabase() {
+/* ------------------------------ Persistence ----------------------------- */
+
+const defaultDB = {
+  version: 1,
+  users: {},
+  companies: {},
+  contracts: {},
+  alliances: {},
+  chat: { global: [] }
+};
+
+function loadDB() {
   try {
-    if (!fs.existsSync(DATA_FILE)) {
-      const db = defaultDatabase();
-      saveDatabase(db);
-      return db;
-    }
-
+    if (!fs.existsSync(DATA_FILE)) return structuredClone(defaultDB);
     const raw = fs.readFileSync(DATA_FILE, "utf8");
+    const db = JSON.parse(raw);
+    return {
+      ...structuredClone(defaultDB),
+      ...db,
+      users: db.users || {},
+      companies: db.companies || {},
+      contracts: db.contracts || {},
+      alliances: db.alliances || {},
+      chat: db.chat || { global: [] }
+    };
+  } catch (e) {
+    console.error("Could not load database:", e.message);
+    return structuredClone(defaultDB);
+  }
+}
 
-    if (!raw.trim()) {
-      const db = defaultDatabase();
-      saveDatabase(db);
-      return db;
+let db = loadDB();
+let saveTimer = null;
+
+function saveDB() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      const tmp = `${DATA_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+      fs.renameSync(tmp, DATA_FILE);
+    } catch (e) {
+      console.error("Database save failed:", e.message);
     }
-
-    return JSON.parse(raw);
-  } catch (err) {
-    console.error("Database load error:", err);
-    return defaultDatabase();
-  }
+  }, 250);
 }
 
-function saveDatabase(db) {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
-  } catch (err) {
-    console.error("Database save error:", err);
-  }
+function id(prefix) {
+  return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 }
-
-let db = loadDatabase();
-
-/* =========================================================
-   HELPERS
-   ========================================================= */
 
 function now() {
   return Date.now();
 }
 
-function id(prefix) {
-  return (
-    prefix +
-    "_" +
-    Math.random().toString(36).substring(2, 12) +
-    Date.now().toString(36)
-  );
-}
-
-function getParam(req, name, fallback = "") {
-  if (req.query && req.query[name] !== undefined) {
-    return req.query[name];
-  }
-
-  if (req.body && req.body[name] !== undefined) {
-    return req.body[name];
-  }
-
-  return fallback;
-}
-
-function getOperation(req) {
-  return (
-    getParam(req, "Operation") ||
-    getParam(req, "operation") ||
-    getParam(req, "op") ||
-    ""
-  );
-}
-
-function cleanNumber(value, fallback = 0) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function sendSuccess(res, data = {}) {
-  res.json({
-    success: true,
-    status: "success",
-    ...data
-  });
-}
-
-function sendError(res, message, statusCode = 400) {
-  res.status(statusCode).json({
-    success: false,
-    error: message,
-    status: "error"
-  });
-}
-
-/* =========================================================
-   USER / COMPANY HELPERS
-   ========================================================= */
-
-function findUserById(userId) {
-  return db.users.find(
-    (u) => u.id === userId || u.user_id === userId
-  );
-}
-
-function findUserByUsername(username) {
-  return db.users.find(
-    (u) =>
-      String(u.username).toLowerCase() ===
-      String(username).toLowerCase()
-  );
-}
-
-function findCompanyById(companyId) {
-  return db.companies.find(
-    (c) => c.id === companyId || c.company_id === companyId
-  );
-}
-
-function findUserFromRequest(req) {
-  let token = getParam(req, "token");
-
-  const auth = req.headers.authorization;
-
-  if (!token && auth && auth.startsWith("Bearer ")) {
-    token = auth.substring(7);
-  }
-
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      const user = findUserById(decoded.user_id);
-
-      if (user) {
-        return user;
-      }
-    } catch (_) {}
-  }
-
-  const userId =
-    getParam(req, "user_id") ||
-    getParam(req, "userid") ||
-    getParam(req, "userId");
-
-  if (userId) {
-    const user = findUserById(userId);
-    if (user) return user;
-  }
-
-  const username = getParam(req, "username");
-
-  if (username) {
-    const user = findUserByUsername(username);
-    if (user) return user;
-  }
-
-  return null;
-}
-
-function publicUser(user) {
+function cleanUser(user) {
   if (!user) return null;
-
-  return {
-    id: user.id,
-    user_id: user.id,
-    username: user.username,
-    user_name: user.username,
-    email: user.email || "",
-    country: user.country || "India",
-    goldCoins: user.goldCoins || 0,
-    gold_coins: user.goldCoins || 0,
-    createdAt: user.createdAt,
-    lastLoginAt: user.lastLoginAt,
-    dataUser: user
-  };
+  const { passwordHash, ...safe } = user;
+  return safe;
 }
 
-function getCompanyForUser(user) {
-  if (!user) return null;
+/* ------------------------------- Economics ------------------------------ */
 
-  let company = findCompanyById(user.company_id);
+function calculateBusinessIncome(company, secondsElapsed) {
+  let total = 0;
 
-  if (!company) {
-    company = db.companies.find(
-      (c) => c.ownerId === user.id
-    );
+  for (const [type, owned] of Object.entries(company.businesses || {})) {
+    const item = CATALOG.businesses[type];
+    if (!item || !owned || owned.quantity <= 0) continue;
+
+    const cycles = Math.floor(secondsElapsed / item.cycle);
+    if (cycles <= 0) continue;
+
+    const levelMultiplier = 1 + ((owned.level || 1) - 1) * 0.10;
+    total += cycles * item.income * owned.quantity * levelMultiplier;
   }
 
-  return company || null;
+  for (const [type, owned] of Object.entries(company.transports || {})) {
+    const item = CATALOG.transports[type];
+    if (!item || !owned || owned.quantity <= 0) continue;
+
+    const cycles = Math.floor(secondsElapsed / item.cycle);
+    if (cycles <= 0) continue;
+
+    total += cycles * item.income * owned.quantity;
+  }
+
+  const concession = CATALOG.concession[company.concession];
+  if (concession) total *= concession.incomeMultiplier;
+
+  const subsidiary = CATALOG.subsidiaries[company.subsidiary];
+  if (subsidiary) total *= subsidiary.incomeMultiplier;
+
+  return Math.floor(total);
 }
 
-/* =========================================================
-   COMPANY DEFAULT
-   ========================================================= */
-
-function createCompany(user, params = {}) {
-  const company = {
-    id: id("company"),
-    company_id: id("company"),
-
-    ownerId: user.id,
-    owner_id: user.id,
-
-    name:
-      params.company_name ||
-      params.companyName ||
-      user.username,
-
-    country:
-      params.country ||
-      user.country ||
-      "India",
-
-    level: cleanNumber(params.level, 1),
-
-    xp: cleanNumber(params.xp, 0),
-
-    money: cleanNumber(params.money, 100000),
-
-    net_worth: cleanNumber(
-      params.net_worth,
-      cleanNumber(params.money, 100000)
-    ),
-
-    economy_level: cleanNumber(params.economy_level, 1),
-
-    businesses: {},
-
-    transports: {},
-
-    concessions: {},
-
-    subsidiaries: {},
-
-    contracts: [],
-
-    contractsCompleted: 0,
-
-    allianceId: null,
-
-    patriotism: 0,
-
-    location: {
-      latitude: cleanNumber(params.latitude, 0),
-      longitude: cleanNumber(params.longitude, 0)
-    },
-
-    lastIncomeAt: now(),
-
-    createdAt: now()
-  };
-
-  db.companies.push(company);
-
-  user.company_id = company.id;
-
-  return company;
-}
-
-/* =========================================================
-   AUTH
-   ========================================================= */
-
-function createToken(user) {
-  return jwt.sign(
-    {
-      user_id: user.id,
-      username: user.username
-    },
-    JWT_SECRET,
-    {
-      expiresIn: "365d"
-    }
-  );
-}
-
-function registerUser(req, res) {
-  const username =
-    getParam(req, "username") ||
-    getParam(req, "user_name");
-
-  const password = getParam(req, "password");
-
-  const country =
-    getParam(req, "country") || "India";
-
-  const email =
-    getParam(req, "email") || "";
-
-  if (!username || !password) {
-    return sendError(
-      res,
-      "username and password are required"
-    );
-  }
-
-  if (findUserByUsername(username)) {
-    return sendError(
-      res,
-      "Username already exists"
-    );
-  }
-
-  const passwordHash = bcrypt.hashSync(password, 10);
-
-  const user = {
-    id: id("user"),
-    user_id: null,
-
-    username,
-    user_name: username,
-
-    email,
-
-    country,
-
-    passwordHash,
-
-    goldCoins: 0,
-    gold_coins: 0,
-
-    createdAt: now(),
-    lastLoginAt: now(),
-
-    company_id: null,
-
-    location: {
-      latitude: 0,
-      longitude: 0
-    },
-
-    army: {
-      soldiers: 0,
-      tanks: 0,
-      aircraft: 0,
-      ships: 0
-    }
-  };
-
-  user.user_id = user.id;
-
-  db.users.push(user);
-
-  const company = createCompany(user, {
-    company_name:
-      getParam(req, "company_name") ||
-      username,
-
-    country,
-
-    money: getParam(req, "money", 100000),
-
-    net_worth: getParam(req, "net_worth", 100000),
-
-    level: getParam(req, "level", 1),
-
-    economy_level:
-      getParam(req, "economy_level", 1)
-  });
-
-  const token = createToken(user);
-
-  saveDatabase(db);
-
-  return res.json({
-    success: true,
-    status: "success",
-    token,
-
-    user: publicUser(user),
-
-    userData: {
-      id: user.id,
-      user_id: user.id,
-      username: user.username,
-      user_name: user.username,
-      email: user.email,
-      country: user.country,
-      goldCoins: user.goldCoins,
-      gold_coins: user.gold_coins,
-      createdAt: user.createdAt,
-      lastLoginAt: user.lastLoginAt
-    },
-
-    company,
-
-    message: "Registration successful"
-  });
-}
-
-function loginUser(req, res) {
-  const username =
-    getParam(req, "username") ||
-    getParam(req, "user_name");
-
-  const password = getParam(req, "password");
-
-  const user = findUserByUsername(username);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  if (!bcrypt.compareSync(password, user.passwordHash)) {
-    return sendError(res, "Invalid password", 401);
-  }
-
-  user.lastLoginAt = now();
-
-  const token = createToken(user);
-
-  const company = getCompanyForUser(user);
-
-  saveDatabase(db);
-
-  return res.json({
-    success: true,
-    status: "success",
-    token,
-    user: publicUser(user),
-    userData: publicUser(user),
-    company
-  });
-}
-
-/* =========================================================
-   USER DATA
-   ========================================================= */
-
-function getUserData(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  return res.json({
-    success: true,
-    status: "success",
-
-    user: publicUser(user),
-
-    userData: publicUser(user),
-
-    company,
-
-    money: company ? company.money : 0,
-
-    level: company ? company.level : 1,
-
-    xp: company ? company.xp : 0,
-
-    net_worth: company ? company.net_worth : 0
-  });
-}
-
-function updateUserData(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const fields = [
-    "country",
-    "email",
-    "username",
-    "user_name"
-  ];
-
-  for (const field of fields) {
-    const value = getParam(req, field);
-
-    if (value !== "") {
-      if (
-        field === "username" ||
-        field === "user_name"
-      ) {
-        user.username = value;
-        user.user_name = value;
-      } else {
-        user[field] = value;
-      }
-    }
-  }
-
-  if (company) {
-    const money = getParam(req, "money");
-
-    if (money !== "") {
-      company.money = cleanNumber(
-        money,
-        company.money
-      );
-    }
-
-    const level = getParam(req, "level");
-
-    if (level !== "") {
-      company.level = cleanNumber(
-        level,
-        company.level
-      );
-    }
-
-    const xp = getParam(req, "xp");
-
-    if (xp !== "") {
-      company.xp = cleanNumber(
-        xp,
-        company.xp
-      );
-    }
-  }
-
-  saveDatabase(db);
-
-  return getUserData(req, res);
-}
-
-function updateUserName(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const name =
-    getParam(req, "username") ||
-    getParam(req, "user_name") ||
-    getParam(req, "name");
-
-  if (!name) {
-    return sendError(res, "Name is required");
-  }
-
-  user.username = name;
-  user.user_name = name;
-
-  const company = getCompanyForUser(user);
-
-  if (company) {
-    company.name = name;
-  }
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    user: publicUser(user),
-    company
-  });
-}
-
-function updateUserLocation(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const latitude = cleanNumber(
-    getParam(req, "latitude"),
-    0
-  );
-
-  const longitude = cleanNumber(
-    getParam(req, "longitude"),
-    0
-  );
-
-  user.location = {
-    latitude,
-    longitude
-  };
-
-  const company = getCompanyForUser(user);
-
-  if (company) {
-    company.location = {
-      latitude,
-      longitude
-    };
-  }
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    location: user.location
-  });
-}
-
-/* =========================================================
-   COMPANIES
-   ========================================================= */
-
-function getRelevantCompanies(req, res) {
-  return sendSuccess(res, {
-    companies: db.companies.slice(0, 100)
-  });
-}
-
-function getSameLevelCompanies(req, res) {
-  const level = cleanNumber(
-    getParam(req, "level"),
-    1
-  );
-
-  return sendSuccess(res, {
-    companies: db.companies.filter(
-      (c) => c.level === level
-    )
-  });
-}
-
-function getCompanyByCountryAndLevel(req, res) {
-  const country = getParam(req, "country");
-  const level = cleanNumber(
-    getParam(req, "level"),
-    1
-  );
-
-  return sendSuccess(res, {
-    companies: db.companies.filter(
-      (c) =>
-        (!country || c.country === country) &&
-        c.level === level
-    )
-  });
-}
-
-/* =========================================================
-   BUSINESSES
-   ========================================================= */
-
-function buyBusiness(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const type =
-    getParam(req, "business") ||
-    getParam(req, "business_type") ||
-    getParam(req, "type") ||
-    "business";
-
-  const quantity = Math.max(
-    1,
-    cleanNumber(getParam(req, "quantity"), 1)
-  );
-
-  const price = Math.max(
-    0,
-    cleanNumber(getParam(req, "price"), 1000)
-  );
-
-  const total = price * quantity;
-
-  if (company.money < total) {
-    return sendError(res, "Not enough money");
-  }
-
-  company.money -= total;
-
-  company.businesses[type] =
-    (company.businesses[type] || 0) +
-    quantity;
-
-  company.net_worth += total;
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    company,
-    business: type,
-    quantity
-  });
-}
-
-function sellBusiness(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const type =
-    getParam(req, "business") ||
-    getParam(req, "business_type") ||
-    getParam(req, "type") ||
-    "business";
-
-  const quantity = Math.max(
-    1,
-    cleanNumber(getParam(req, "quantity"), 1)
-  );
-
-  const owned = company.businesses[type] || 0;
-
-  if (owned < quantity) {
-    return sendError(
-      res,
-      "You do not own enough businesses"
-    );
-  }
-
-  const price = Math.max(
-    0,
-    cleanNumber(getParam(req, "price"), 1000)
-  );
-
-  company.businesses[type] -= quantity;
-  company.money += price * quantity;
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    company
-  });
-}
-
-function upgradeBusiness(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const type =
-    getParam(req, "business") ||
-    getParam(req, "business_type") ||
-    "business";
-
-  const cost = Math.max(
-    0,
-    cleanNumber(getParam(req, "price"), 5000)
-  );
-
-  if (company.money < cost) {
-    return sendError(res, "Not enough money");
-  }
-
-  company.money -= cost;
-
-  if (!company.businessLevels) {
-    company.businessLevels = {};
-  }
-
-  company.businessLevels[type] =
-    (company.businessLevels[type] || 0) + 1;
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    company
-  });
-}
-
-/* =========================================================
-   TRANSPORT
-   ========================================================= */
-
-function buyTransport(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const type =
-    getParam(req, "transport") ||
-    getParam(req, "transport_type") ||
-    getParam(req, "type") ||
-    "transport";
-
-  const quantity = Math.max(
-    1,
-    cleanNumber(getParam(req, "quantity"), 1)
-  );
-
-  const price = Math.max(
-    0,
-    cleanNumber(getParam(req, "price"), 5000)
-  );
-
-  const total = price * quantity;
-
-  if (company.money < total) {
-    return sendError(res, "Not enough money");
-  }
-
-  company.money -= total;
-
-  company.transports[type] =
-    (company.transports[type] || 0) +
-    quantity;
-
-  company.net_worth += total;
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    company
-  });
-}
-
-function sellTransport(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const type =
-    getParam(req, "transport") ||
-    getParam(req, "transport_type") ||
-    getParam(req, "type") ||
-    "transport";
-
-  const quantity = Math.max(
-    1,
-    cleanNumber(getParam(req, "quantity"), 1)
-  );
-
-  const owned = company.transports[type] || 0;
-
-  if (owned < quantity) {
-    return sendError(
-      res,
-      "You do not own enough transports"
-    );
-  }
-
-  const price = Math.max(
-    0,
-    cleanNumber(getParam(req, "price"), 5000)
-  );
-
-  company.transports[type] -= quantity;
-
-  company.money += price * quantity;
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    company
-  });
-}
-
-/* =========================================================
-   INCOME
-   ========================================================= */
-
-function collectIncome(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  if (!company) {
-    return sendError(res, "Company not found", 404);
-  }
-
-  const current = now();
-
-  const elapsed =
-    Math.max(
-      0,
-      current - (company.lastIncomeAt || current)
-    );
-
-  const cycles =
-    Math.floor(elapsed / 60000);
-
-  const incomePerCycle = 100;
-
-  const income =
-    Math.max(0, cycles) *
-    incomePerCycle;
+function collectOfflineIncome(company) {
+  const t = now();
+  const elapsed = Math.max(0, Math.min(t - (company.lastIncomeAt || t), 7 * 24 * 3600 * 1000));
+  const income = calculateBusinessIncome(company, Math.floor(elapsed / 1000));
+
+  company.money += income;
+  company.totalIncome += income;
+  company.lastIncomeAt = t;
 
   if (income > 0) {
-    company.money += income;
-    company.lastIncomeAt =
-      current;
+    company.xp += Math.floor(income / 100);
+    updateLevel(company);
+  }
+  return income;
+}
+
+function updateLevel(company) {
+  let level = company.level || 1;
+  while (
+    level < LEVELS.length &&
+    company.xp >= LEVELS[level].xpRequired
+  ) level++;
+
+  company.level = Math.min(level, LEVELS.length);
+}
+
+function netWorth(company) {
+  let value = company.money;
+
+  for (const [type, owned] of Object.entries(company.businesses || {})) {
+    const item = CATALOG.businesses[type];
+    if (item) value += item.price * (owned.quantity || 0);
+  }
+  for (const [type, owned] of Object.entries(company.transports || {})) {
+    const item = CATALOG.transports[type];
+    if (item) value += item.price * (owned.quantity || 0);
   }
 
-  saveDatabase(db);
+  return Math.floor(value);
+}
 
-  return sendSuccess(res, {
-    income,
+function getCompany(userId) {
+  return db.companies[userId] || null;
+}
+
+function publicCompany(company) {
+  if (!company) return null;
+  collectOfflineIncome(company);
+
+  return {
+    id: company.id,
+    ownerId: company.ownerId,
+    name: company.name,
+    country: company.country,
+    level: company.level,
+    xp: company.xp,
     money: company.money,
-    company
-  });
-}
-
-/* =========================================================
-   CONCESSIONS / SUBSIDIARIES
-   ========================================================= */
-
-function buyConcession(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const country =
-    getParam(req, "country") ||
-    "India";
-
-  const price = Math.max(
-    0,
-    cleanNumber(getParam(req, "price"), 10000)
-  );
-
-  if (company.money < price) {
-    return sendError(res, "Not enough money");
-  }
-
-  company.money -= price;
-
-  company.concessions[country] = {
-    country,
-    purchasedAt: now()
+    totalIncome: company.totalIncome,
+    netWorth: netWorth(company),
+    businesses: company.businesses,
+    transports: company.transports,
+    concession: company.concession,
+    subsidiary: company.subsidiary,
+    contractsCompleted: company.contractsCompleted,
+    createdAt: company.createdAt
   };
+}
 
-  saveDatabase(db);
+/* -------------------------------- Auth --------------------------------- */
 
-  return sendSuccess(res, {
-    company
+function signToken(userId) {
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: "30d" });
+}
+
+function auth(req, res, next) {
+  try {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Missing Bearer token" });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = db.users[decoded.userId];
+    if (!user) return res.status(401).json({ error: "Invalid account" });
+
+    req.user = user;
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+}
+
+function requireCompany(req, res, next) {
+  const company = getCompany(req.user.id);
+  if (!company) return res.status(404).json({ error: "Create a company first" });
+  collectOfflineIncome(company);
+  req.company = company;
+  next();
+}
+
+/* ------------------------------- Health -------------------------------- */
+
+app.get("/", (req, res) => {
+  res.json({
+    name: "Entrepreneur Private Multiplayer Server",
+    status: "online",
+    version: "1.0.0",
+    time: new Date().toISOString()
   });
-}
-
-function buySubsidiary(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  const name =
-    getParam(req, "name") ||
-    getParam(req, "company_name") ||
-    "Subsidiary";
-
-  const price = Math.max(
-    0,
-    cleanNumber(getParam(req, "price"), 25000)
-  );
-
-  if (company.money < price) {
-    return sendError(res, "Not enough money");
-  }
-
-  company.money -= price;
-
-  company.subsidiaries[name] = {
-    name,
-    purchasedAt: now()
-  };
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    company
-  });
-}
-
-function getConcessionsTrends(req, res) {
-  return sendSuccess(res, {
-    trends: []
-  });
-}
-
-/* =========================================================
-   CONTRACTS
-   ========================================================= */
-
-function getRunningContracts(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  return sendSuccess(res, {
-    contracts: company
-      ? company.contracts
-      : []
-  });
-}
-
-function getContractsStatus(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  return sendSuccess(res, {
-    contracts: company
-      ? company.contracts
-      : [],
-
-    completed: company
-      ? company.contractsCompleted
-      : 0
-  });
-}
-
-/* =========================================================
-   COUNTRY
-   ========================================================= */
-
-function getCountryData(req, res) {
-  const country =
-    getParam(req, "country") ||
-    "India";
-
-  const companies =
-    db.companies.filter(
-      (c) => c.country === country
-    );
-
-  return sendSuccess(res, {
-    country,
-
-    data: {
-      country,
-      companies: companies.length,
-      players: db.users.filter(
-        (u) => u.country === country
-      ).length
-    }
-  });
-}
-
-/* =========================================================
-   ALLIANCES
-   ========================================================= */
-
-function createAlliance(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const name =
-    getParam(req, "name") ||
-    getParam(req, "alliance_name") ||
-    "Alliance";
-
-  const alliance = {
-    id: id("alliance"),
-    alliance_id: id("alliance"),
-
-    name,
-
-    country:
-      user.country || "India",
-
-    ownerId: user.id,
-
-    members: [user.id],
-
-    messages: [],
-
-    createdAt: now()
-  };
-
-  db.alliances.push(alliance);
-
-  const company = getCompanyForUser(user);
-
-  if (company) {
-    company.allianceId = alliance.id;
-  }
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    alliance
-  });
-}
-
-function joinAlliance(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const allianceId =
-    getParam(req, "alliance_id") ||
-    getParam(req, "allianceId");
-
-  const alliance =
-    db.alliances.find(
-      (a) =>
-        a.id === allianceId ||
-        a.alliance_id === allianceId
-    );
-
-  if (!alliance) {
-    return sendError(res, "Alliance not found", 404);
-  }
-
-  if (!alliance.members.includes(user.id)) {
-    alliance.members.push(user.id);
-  }
-
-  const company = getCompanyForUser(user);
-
-  if (company) {
-    company.allianceId = alliance.id;
-  }
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    alliance
-  });
-}
-
-function leaveAlliance(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  if (company && company.allianceId) {
-    const alliance =
-      db.alliances.find(
-        (a) => a.id === company.allianceId
-      );
-
-    if (alliance) {
-      alliance.members =
-        alliance.members.filter(
-          (id) => id !== user.id
-        );
-    }
-
-    company.allianceId = null;
-  }
-
-  saveDatabase(db);
-
-  return sendSuccess(res);
-}
-
-function getAlliancesByCountry(req, res) {
-  const country =
-    getParam(req, "country");
-
-  return sendSuccess(res, {
-    alliances: db.alliances.filter(
-      (a) =>
-        !country ||
-        a.country === country
-    )
-  });
-}
-
-function getAlliancesRankings(req, res) {
-  const rankings =
-    db.alliances
-      .map((a) => ({
-        ...a,
-        memberCount: a.members.length
-      }))
-      .sort(
-        (a, b) =>
-          b.memberCount -
-          a.memberCount
-      );
-
-  return sendSuccess(res, {
-    alliances: rankings
-  });
-}
-
-function getAllianceDetails(req, res) {
-  const allianceId =
-    getParam(req, "alliance_id") ||
-    getParam(req, "allianceId");
-
-  const alliance =
-    db.alliances.find(
-      (a) =>
-        a.id === allianceId ||
-        a.alliance_id === allianceId
-    );
-
-  if (!alliance) {
-    return sendError(
-      res,
-      "Alliance not found",
-      404
-    );
-  }
-
-  return sendSuccess(res, {
-    alliance
-  });
-}
-
-/* =========================================================
-   CHAT
-   ========================================================= */
-
-function sendAllianceMessage(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const allianceId =
-    getParam(req, "alliance_id") ||
-    getParam(req, "allianceId");
-
-  const message =
-    getParam(req, "message") ||
-    getParam(req, "text");
-
-  if (!message) {
-    return sendError(res, "Message required");
-  }
-
-  const item = {
-    id: id("message"),
-    allianceId,
-    userId: user.id,
-    username: user.username,
-    message,
-    createdAt: now()
-  };
-
-  db.chats.push(item);
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    message: item
-  });
-}
-
-function getAllianceMessages(req, res) {
-  const allianceId =
-    getParam(req, "alliance_id") ||
-    getParam(req, "allianceId");
-
-  return sendSuccess(res, {
-    messages: db.chats.filter(
-      (m) =>
-        !allianceId ||
-        m.allianceId === allianceId
-    )
-  });
-}
-
-function sendCountryMessage(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const message =
-    getParam(req, "message") ||
-    getParam(req, "text");
-
-  if (!message) {
-    return sendError(res, "Message required");
-  }
-
-  const item = {
-    id: id("country_message"),
-    country: user.country,
-    userId: user.id,
-    username: user.username,
-    message,
-    createdAt: now()
-  };
-
-  db.countryChats.push(item);
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    message: item
-  });
-}
-
-function getCountryMessages(req, res) {
-  const country =
-    getParam(req, "country");
-
-  return sendSuccess(res, {
-    messages: db.countryChats.filter(
-      (m) =>
-        !country ||
-        m.country === country
-    )
-  });
-}
-
-/* =========================================================
-   ARMY
-   ========================================================= */
-
-function getUserArmy(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  return sendSuccess(res, {
-    army: user.army || {
-      soldiers: 0,
-      tanks: 0,
-      aircraft: 0,
-      ships: 0
-    }
-  });
-}
-
-function updateArmy(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  if (!user.army) {
-    user.army = {};
-  }
-
-  const types = [
-    "soldiers",
-    "tanks",
-    "aircraft",
-    "ships"
-  ];
-
-  for (const type of types) {
-    const value = getParam(req, type);
-
-    if (value !== "") {
-      user.army[type] =
-        Math.max(
-          0,
-          cleanNumber(value, 0)
-        );
-    }
-  }
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    army: user.army
-  });
-}
-
-function armyAttack(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const targetId =
-    getParam(req, "target_user_id") ||
-    getParam(req, "targetUserId") ||
-    getParam(req, "user_id");
-
-  const target =
-    findUserById(targetId);
-
-  if (!target) {
-    return sendError(
-      res,
-      "Target user not found",
-      404
-    );
-  }
-
-  const attack = {
-    id: id("attack"),
-    attackerId: user.id,
-    defenderId: target.id,
-    createdAt: now(),
-    result: "pending"
-  };
-
-  db.armyAttacks.push(attack);
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    attack
-  });
-}
-
-/* =========================================================
-   BIDS
-   ========================================================= */
-
-function postBid(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const bid = {
-    id: id("bid"),
-    userId: user.id,
-    username: user.username,
-    amount: cleanNumber(
-      getParam(req, "amount"),
-      0
-    ),
-    createdAt: now()
-  };
-
-  db.bids.push(bid);
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    bid
-  });
-}
-
-function getBidRanking(req, res) {
-  const rankings =
-    [...db.bids].sort(
-      (a, b) =>
-        b.amount - a.amount
-    );
-
-  return sendSuccess(res, {
-    bids: rankings
-  });
-}
-
-/* =========================================================
-   DONATIONS / RESOLUTIONS
-   ========================================================= */
-
-function postDonation(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const donation = {
-    id: id("donation"),
-    userId: user.id,
-    amount: cleanNumber(
-      getParam(req, "amount"),
-      0
-    ),
-    createdAt: now()
-  };
-
-  db.donations.push(donation);
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    donation
-  });
-}
-
-function postResolution(req, res) {
-  const resolution = {
-    id: id("resolution"),
-    title:
-      getParam(req, "title") ||
-      "Resolution",
-
-    description:
-      getParam(req, "description") ||
-      "",
-
-    yes: 0,
-    no: 0,
-
-    active: true,
-
-    createdAt: now()
-  };
-
-  db.resolutions.push(resolution);
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    resolution
-  });
-}
-
-function voteOnResolution(req, res) {
-  const idValue =
-    getParam(req, "resolution_id") ||
-    getParam(req, "resolutionId");
-
-  const resolution =
-    db.resolutions.find(
-      (r) => r.id === idValue
-    );
-
-  if (!resolution) {
-    return sendError(
-      res,
-      "Resolution not found",
-      404
-    );
-  }
-
-  const vote =
-    getParam(req, "vote") ||
-    getParam(req, "choice");
-
-  if (
-    String(vote).toLowerCase() ===
-    "yes"
-  ) {
-    resolution.yes++;
-  } else {
-    resolution.no++;
-  }
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    resolution
-  });
-}
-
-function getActiveResolutions(req, res) {
-  return sendSuccess(res, {
-    resolutions:
-      db.resolutions.filter(
-        (r) => r.active
-      )
-  });
-}
-
-/* =========================================================
-   WARS / PATRIOTISM
-   ========================================================= */
-
-function getWarsByCountry(req, res) {
-  const country =
-    getParam(req, "country");
-
-  return sendSuccess(res, {
-    wars: db.wars.filter(
-      (w) =>
-        !country ||
-        w.country === country
-    )
-  });
-}
-
-function updateCompanyPatriotism(req, res) {
-  const user = findUserFromRequest(req);
-
-  if (!user) {
-    return sendError(res, "User not found", 404);
-  }
-
-  const company = getCompanyForUser(user);
-
-  if (!company) {
-    return sendError(
-      res,
-      "Company not found",
-      404
-    );
-  }
-
-  company.patriotism =
-    cleanNumber(
-      getParam(req, "patriotism"),
-      company.patriotism
-    );
-
-  saveDatabase(db);
-
-  return sendSuccess(res, {
-    patriotism:
-      company.patriotism
-  });
-}
-
-/* =========================================================
-   RESOURCE / TIME
-   ========================================================= */
-
-function getServerTime(req, res) {
-  return sendSuccess(res, {
-    serverTime: now(),
-    timestamp: now()
-  });
-}
-
-/* =========================================================
-   RANKINGS
-   ========================================================= */
-
-function getRankings(req, res) {
-  const rankings =
-    db.companies
-      .map((c) => ({
-        id: c.id,
-        company_id: c.id,
-        name: c.name,
-        country: c.country,
-        level: c.level,
-        xp: c.xp,
-        money: c.money,
-        net_worth: c.net_worth,
-        ownerId: c.ownerId
-      }))
-      .sort(
-        (a, b) =>
-          b.net_worth -
-          a.net_worth
-      );
-
-  return sendSuccess(res, {
-    rankings,
-    companies: rankings
-  });
-}
-
-/* =========================================================
-   OPERATION ROUTER
-   ========================================================= */
-
-async function operationRouter(req, res) {
-  const operation = getOperation(req);
-
-  console.log(
-    `[${new Date().toISOString()}]`,
-    req.method,
-    req.path,
-    operation
-  );
-
-  switch (operation) {
-    case "RegisterUser":
-      return registerUser(req, res);
-
-    case "Login":
-    case "login":
-      return loginUser(req, res);
-
-    case "getUserData":
-      return getUserData(req, res);
-
-    case "updateUserData":
-      return updateUserData(req, res);
-
-    case "UpdateUserName":
-      return updateUserName(req, res);
-
-    case "UpdateUserLocation":
-      return updateUserLocation(req, res);
-
-    case "getRelevantCompanies":
-      return getRelevantCompanies(req, res);
-
-    case "getSameLevelCompanies":
-      return getSameLevelCompanies(req, res);
-
-    case "getCompanyByCountryAndLevel":
-      return getCompanyByCountryAndLevel(
-        req,
-        res
-      );
-
-    case "getRunningContracts":
-      return getRunningContracts(req, res);
-
-    case "getContractsStatus":
-      return getContractsStatus(req, res);
-
-    case "getCountryData":
-      return getCountryData(req, res);
-
-    case "getConcessionsTrends":
-      return getConcessionsTrends(req, res);
-
-    case "getAlliancesByCountry":
-      return getAlliancesByCountry(
-        req,
-        res
-      );
-
-    case "getAlliancesRankings":
-      return getAlliancesRankings(
-        req,
-        res
-      );
-
-    case "getAllianceDetails":
-      return getAllianceDetails(
-        req,
-        res
-      );
-
-    case "createAlliance":
-      return createAlliance(req, res);
-
-    case "joinAlliance":
-      return joinAlliance(req, res);
-
-    case "leaveAlliance":
-      return leaveAlliance(req, res);
-
-    case "sendMessageToAlliance":
-      return sendAllianceMessage(
-        req,
-        res
-      );
-
-    case "getAllianceMessages":
-      return getAllianceMessages(
-        req,
-        res
-      );
-
-    case "fetcChatMessages":
-      return getAllianceMessages(
-        req,
-        res
-      );
-
-    case "fetcCountryChatMessages":
-      return getCountryMessages(
-        req,
-        res
-      );
-
-    case "insertToChatMessages":
-      return sendAllianceMessage(
-        req,
-        res
-      );
-
-    case "insertToCountryChatMessages":
-      return sendCountryMessage(
-        req,
-        res
-      );
-
-    case "getUserArmy":
-      return getUserArmy(req, res);
-
-    case "updateArmy":
-      return updateArmy(req, res);
-
-    case "ArmyAttack":
-      return armyAttack(req, res);
-
-    case "postBid":
-      return postBid(req, res);
-
-    case "getBidRanking":
-      return getBidRanking(req, res);
-
-    case "postDonation":
-      return postDonation(req, res);
-
-    case "postResolution":
-      return postResolution(req, res);
-
-    case "voteOnResolution":
-      return voteOnResolution(
-        req,
-        res
-      );
-
-    case "getActiveResolutions":
-      return getActiveResolutions(
-        req,
-        res
-      );
-
-    case "getWarsByCountry":
-      return getWarsByCountry(
-        req,
-        res
-      );
-
-    case "updateCompanyPatriotsm":
-    case "updateCompanyPatriotism":
-      return updateCompanyPatriotism(
-        req,
-        res
-      );
-
-    case "getServerTime":
-    case "RequestServerTime":
-      return getServerTime(req, res);
-
-    case "getResourcePrices":
-      return sendSuccess(res, {
-        resources: {}
-      });
-
-    case "getConcessionPrices":
-      return sendSuccess(res, {
-        concessions: {}
-      });
-
-    default:
-      return sendError(
-        res,
-        `Unknown operation: ${operation || "none"}`
-      );
-  }
-}
-
-/* =========================================================
-   APK NATIVE API
-   ========================================================= */
-
-/*
-   The original APK constructs:
-
-   https://SERVER:443/RestSimulator
-
-   and sends Operation=... as a GET RequestParam.
-
-   These routes are therefore intentionally kept separate
-   from /api.
-*/
-
-app.get("/RestSimulator", operationRouter);
-app.post("/RestSimulator", operationRouter);
-
-app.get("/RestSimulator/", operationRouter);
-app.post("/RestSimulator/", operationRouter);
-
-/*
-   Some APK resources are constructed as:
-
-   /RestSimulator/wars
-   /RestSimulator/ceos
-   /RestSimulator/company_update/
-   /RestSimulator/allianceBattle/status
-   etc.
-
-   Route them through the same compatibility router.
-*/
-
-app.get(
-  "/RestSimulator/*",
-  operationRouter
-);
-
-app.post(
-  "/RestSimulator/*",
-  operationRouter
-);
-
-/* =========================================================
-   NORMAL REST API
-   ========================================================= */
-
-app.post(
-  "/api/auth/register",
-  registerUser
-);
-
-app.get(
-  "/api/auth/register",
-  registerUser
-);
-
-app.post(
-  "/api/auth/login",
-  loginUser
-);
-
-app.get(
-  "/api/auth/login",
-  loginUser
-);
-
-app.get(
-  "/api/player/me",
-  getUserData
-);
-
-app.get(
-  "/api/player",
-  getUserData
-);
-
-app.get(
-  "/api/company",
-  getUserData
-);
-
-app.post(
-  "/api/company",
-  getUserData
-);
-
-app.post(
-  "/api/business/buy",
-  buyBusiness
-);
-
-app.get(
-  "/api/business/buy",
-  buyBusiness
-);
-
-app.post(
-  "/api/business/sell",
-  sellBusiness
-);
-
-app.get(
-  "/api/business/sell",
-  sellBusiness
-);
-
-app.post(
-  "/api/business/upgrade",
-  upgradeBusiness
-);
-
-app.get(
-  "/api/business/upgrade",
-  upgradeBusiness
-);
-
-app.post(
-  "/api/transport/buy",
-  buyTransport
-);
-
-app.get(
-  "/api/transport/buy",
-  buyTransport
-);
-
-app.post(
-  "/api/transport/sell",
-  sellTransport
-);
-
-app.get(
-  "/api/transport/sell",
-  sellTransport
-);
-
-app.get(
-  "/api/income/collect",
-  collectIncome
-);
-
-app.post(
-  "/api/income/collect",
-  collectIncome
-);
-
-app.post(
-  "/api/concession/buy",
-  buyConcession
-);
-
-app.get(
-  "/api/concession/buy",
-  buyConcession
-);
-
-app.post(
-  "/api/subsidiary/buy",
-  buySubsidiary
-);
-
-app.get(
-  "/api/subsidiary/buy",
-  buySubsidiary
-);
-
-app.get(
-  "/api/rankings",
-  getRankings
-);
-
-app.get(
-  "/api/contracts",
-  getRunningContracts
-);
-
-app.get(
-  "/api/chat",
-  getAllianceMessages
-);
-
-app.post(
-  "/api/chat",
-  sendAllianceMessage
-);
-
-/* =========================================================
-   HEALTH / ROOT
-   ========================================================= */
+});
 
 app.get("/health", (req, res) => {
   res.json({
-    success: true,
-    status: "online",
-    service: "Entrepreneur Company Manager Server",
-    version: "2.0.0",
-    time: now()
+    ok: true,
+    uptime: process.uptime(),
+    players: Object.keys(db.users).length,
+    companies: Object.keys(db.companies).length,
+    time: new Date().toISOString()
   });
 });
 
-/*
-   IMPORTANT:
-   Operation requests to / are handled before the normal
-   root response.
-*/
+app.get("/api/catalog", (req, res) => {
+  res.json({ catalog: CATALOG, levels: LEVELS });
+});
 
-app.get("/", (req, res, next) => {
-  if (getOperation(req)) {
-    return operationRouter(req, res);
+/* ------------------------------- Account -------------------------------- */
+
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const username = String(req.body.username || "").trim();
+    const password = String(req.body.password || "");
+    const country = String(req.body.country || "India").trim();
+
+    if (!/^[A-Za-z0-9_]{3,24}$/.test(username))
+      return res.status(400).json({ error: "Username must be 3-24 letters/numbers/underscore" });
+
+    if (password.length < 6)
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+
+    const exists = Object.values(db.users).some(
+      u => u.username.toLowerCase() === username.toLowerCase()
+    );
+    if (exists) return res.status(409).json({ error: "Username already exists" });
+
+    const userId = id("usr");
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const user = {
+      id: userId,
+      username,
+      country,
+      passwordHash,
+      createdAt: now(),
+      lastLoginAt: now()
+    };
+
+    db.users[userId] = user;
+    saveDB();
+
+    const token = signToken(userId);
+    res.json({ token, user: cleanUser(user) });
+  } catch (e) {
+    res.status(500).json({ error: "Registration failed" });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  const username = String(req.body.username || "").trim();
+  const password = String(req.body.password || "");
+
+  const user = Object.values(db.users).find(
+    u => u.username.toLowerCase() === username.toLowerCase()
+  );
+
+  if (!user || !(await bcrypt.compare(password, user.passwordHash)))
+    return res.status(401).json({ error: "Invalid username or password" });
+
+  user.lastLoginAt = now();
+  saveDB();
+
+  res.json({
+    token: signToken(user.id),
+    user: cleanUser(user),
+    company: publicCompany(getCompany(user.id))
+  });
+});
+
+app.get("/api/player/me", auth, (req, res) => {
+  res.json({
+    user: cleanUser(req.user),
+    company: publicCompany(getCompany(req.user.id))
+  });
+});
+
+/* ------------------------------- Company -------------------------------- */
+
+app.post("/api/company", auth, (req, res) => {
+  if (getCompany(req.user.id))
+    return res.status(409).json({ error: "Company already exists" });
+
+  const name = String(req.body.name || `${req.user.username} Corp`).trim();
+  if (name.length < 2 || name.length > 40)
+    return res.status(400).json({ error: "Company name must be 2-40 characters" });
+
+  const company = {
+    id: id("cmp"),
+    ownerId: req.user.id,
+    name,
+    country: req.user.country,
+    level: 1,
+    xp: 0,
+    money: 100000,
+    totalIncome: 0,
+    businesses: {},
+    transports: {},
+    concession: null,
+    subsidiary: null,
+    contractsCompleted: 0,
+    allianceId: null,
+    lastIncomeAt: now(),
+    createdAt: now()
+  };
+
+  db.companies[req.user.id] = company;
+  saveDB();
+
+  res.status(201).json({ company: publicCompany(company) });
+});
+
+app.get("/api/company", auth, requireCompany, (req, res) => {
+  res.json({ company: publicCompany(req.company) });
+});
+
+app.get("/api/company/:ownerId", auth, (req, res) => {
+  const company = db.companies[req.params.ownerId];
+  if (!company) return res.status(404).json({ error: "Company not found" });
+  res.json({ company: publicCompany(company) });
+});
+
+/* ------------------------------ Businesses ------------------------------ */
+
+app.post("/api/business/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+
+  const item = CATALOG.businesses[type];
+  if (!item) return res.status(400).json({ error: "Unknown business type" });
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100000)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const cost = item.price * quantity;
+  if (req.company.money < cost)
+    return res.status(400).json({ error: "Insufficient funds", required: cost });
+
+  req.company.money -= cost;
+  req.company.businesses[type] ||= { quantity: 0, level: 1 };
+  req.company.businesses[type].quantity += quantity;
+  req.company.xp += Math.floor(cost / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company), purchased: { type, quantity, cost } });
+});
+
+app.post("/api/business/sell", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+  const item = CATALOG.businesses[type];
+  const owned = req.company.businesses[type];
+
+  if (!item || !owned) return res.status(400).json({ error: "Business not owned" });
+  if (quantity < 1 || quantity > owned.quantity)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const refund = Math.floor(item.price * quantity * 0.70);
+  owned.quantity -= quantity;
+  req.company.money += refund;
+  if (owned.quantity === 0) delete req.company.businesses[type];
+
+  saveDB();
+  res.json({ company: publicCompany(req.company), sold: { type, quantity, refund } });
+});
+
+app.post("/api/business/upgrade", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const owned = req.company.businesses[type];
+  const item = CATALOG.businesses[type];
+
+  if (!item || !owned) return res.status(400).json({ error: "Business not owned" });
+  if (owned.level >= item.maxLevel)
+    return res.status(400).json({ error: "Maximum business level reached" });
+
+  const upgradeCost = Math.floor(item.price * Math.pow(1.55, owned.level - 1));
+  if (req.company.money < upgradeCost)
+    return res.status(400).json({ error: "Insufficient funds", required: upgradeCost });
+
+  req.company.money -= upgradeCost;
+  owned.level++;
+  req.company.xp += Math.floor(upgradeCost / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company), upgradeCost });
+});
+
+/* ------------------------------ Transport ------------------------------- */
+
+app.post("/api/transport/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+  const item = CATALOG.transports[type];
+
+  if (!item) return res.status(400).json({ error: "Unknown transport type" });
+  if (quantity < 1 || quantity > 10000)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const cost = item.price * quantity;
+  if (req.company.money < cost)
+    return res.status(400).json({ error: "Insufficient funds", required: cost });
+
+  req.company.money -= cost;
+  req.company.transports[type] ||= { quantity: 0 };
+  req.company.transports[type].quantity += quantity;
+  req.company.xp += Math.floor(cost / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company), purchased: { type, quantity, cost } });
+});
+
+app.post("/api/transport/sell", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const quantity = Math.floor(Number(req.body.quantity || 0));
+  const item = CATALOG.transports[type];
+  const owned = req.company.transports[type];
+
+  if (!item || !owned) return res.status(400).json({ error: "Transport not owned" });
+  if (quantity < 1 || quantity > owned.quantity)
+    return res.status(400).json({ error: "Invalid quantity" });
+
+  const refund = Math.floor(item.price * quantity * 0.70);
+  owned.quantity -= quantity;
+  req.company.money += refund;
+  if (owned.quantity === 0) delete req.company.transports[type];
+
+  saveDB();
+  res.json({ company: publicCompany(req.company), sold: { type, quantity, refund } });
+});
+
+/* ------------------------------- Upgrades -------------------------------- */
+
+app.post("/api/concession/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const item = CATALOG.concession[type];
+  if (!item) return res.status(400).json({ error: "Unknown concession" });
+  if (req.company.concession)
+    return res.status(400).json({ error: "Concession already owned" });
+  if (req.company.money < item.price)
+    return res.status(400).json({ error: "Insufficient funds" });
+
+  req.company.money -= item.price;
+  req.company.concession = type;
+  req.company.xp += Math.floor(item.price / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company) });
+});
+
+app.post("/api/subsidiary/buy", auth, requireCompany, (req, res) => {
+  const type = String(req.body.type || "");
+  const item = CATALOG.subsidiaries[type];
+  if (!item) return res.status(400).json({ error: "Unknown subsidiary" });
+  if (req.company.subsidiary)
+    return res.status(400).json({ error: "Subsidiary already owned" });
+  if (req.company.money < item.price)
+    return res.status(400).json({ error: "Insufficient funds" });
+
+  req.company.money -= item.price;
+  req.company.subsidiary = type;
+  req.company.xp += Math.floor(item.price / 100);
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ company: publicCompany(req.company) });
+});
+
+/* -------------------------------- Income -------------------------------- */
+
+app.post("/api/income/collect", auth, requireCompany, (req, res) => {
+  const before = req.company.money;
+  const income = collectOfflineIncome(req.company);
+  saveDB();
+
+  res.json({
+    collected: income,
+    moneyBefore: before,
+    moneyAfter: req.company.money,
+    company: publicCompany(req.company)
+  });
+});
+
+/* ------------------------------- Contracts ------------------------------- */
+
+function createContractForCompany(company) {
+  const idValue = id("ctr");
+  const difficulty = 1 + Math.floor(Math.random() * Math.max(1, company.level));
+  const reward = 5000 * difficulty * (1 + company.level * 0.10);
+
+  const contract = {
+    id: idValue,
+    companyId: company.id,
+    title: ["Supply Contract", "Transport Contract", "Retail Contract", "Industrial Contract"][
+      Math.floor(Math.random() * 4)
+    ],
+    difficulty,
+    reward: Math.floor(reward),
+    xp: Math.floor(reward / 100),
+    status: "open",
+    createdAt: now(),
+    expiresAt: now() + 24 * 3600 * 1000
+  };
+
+  db.contracts[idValue] = contract;
+  return contract;
+}
+
+app.get("/api/contracts", auth, requireCompany, (req, res) => {
+  const list = Object.values(db.contracts).filter(c =>
+    c.companyId === req.company.id && c.expiresAt > now()
+  );
+
+  while (list.length < 5) {
+    const c = createContractForCompany(req.company);
+    list.push(c);
   }
 
-  return res.json({
-    success: true,
-    status: "online",
-    service: "Entrepreneur Company Manager Server",
-    version: "2.0.0",
+  saveDB();
+  res.json({ contracts: list });
+});
 
-    endpoints: {
-      health: "/health",
-      apk: "/RestSimulator",
-      api: "/api"
+app.post("/api/contracts/:id/complete", auth, requireCompany, (req, res) => {
+  const contract = db.contracts[req.params.id];
+
+  if (!contract || contract.companyId !== req.company.id)
+    return res.status(404).json({ error: "Contract not found" });
+
+  if (contract.status !== "open")
+    return res.status(400).json({ error: "Contract is not open" });
+
+  if (contract.expiresAt < now())
+    return res.status(400).json({ error: "Contract expired" });
+
+  contract.status = "completed";
+  req.company.money += contract.reward;
+  req.company.xp += contract.xp;
+  req.company.contractsCompleted++;
+  updateLevel(req.company);
+  saveDB();
+
+  res.json({ contract, company: publicCompany(req.company) });
+});
+
+/* ------------------------------- Rankings -------------------------------- */
+
+app.get("/api/rankings", auth, (req, res) => {
+  const rankings = Object.values(db.companies)
+    .map(c => {
+      collectOfflineIncome(c);
+      return {
+        companyId: c.id,
+        ownerId: c.ownerId,
+        companyName: c.name,
+        ownerName: db.users[c.ownerId]?.username || "Unknown",
+        country: c.country,
+        level: c.level,
+        netWorth: netWorth(c)
+      };
+    })
+    .sort((a, b) => b.netWorth - a.netWorth)
+    .slice(0, 100);
+
+  saveDB();
+  res.json({ rankings });
+});
+
+/* ------------------------------- Alliances ------------------------------- */
+
+app.post("/api/alliance", auth, requireCompany, (req, res) => {
+  if (req.company.allianceId)
+    return res.status(400).json({ error: "Already in an alliance" });
+
+  const name = String(req.body.name || "").trim();
+  if (name.length < 2 || name.length > 30)
+    return res.status(400).json({ error: "Alliance name must be 2-30 characters" });
+
+  const alliance = {
+    id: id("all"),
+    name,
+    ownerId: req.user.id,
+    members: [req.user.id],
+    createdAt: now()
+  };
+
+  db.alliances[alliance.id] = alliance;
+  req.company.allianceId = alliance.id;
+  saveDB();
+
+  res.status(201).json({ alliance });
+});
+
+app.get("/api/alliances", auth, (req, res) => {
+  res.json({
+    alliances: Object.values(db.alliances).map(a => ({
+      ...a,
+      memberCount: a.members.length
+    }))
+  });
+});
+
+app.post("/api/alliance/:id/join", auth, requireCompany, (req, res) => {
+  const alliance = db.alliances[req.params.id];
+  if (!alliance) return res.status(404).json({ error: "Alliance not found" });
+  if (req.company.allianceId) return res.status(400).json({ error: "Already in an alliance" });
+  if (alliance.members.length >= 50) return res.status(400).json({ error: "Alliance is full" });
+
+  alliance.members.push(req.user.id);
+  req.company.allianceId = alliance.id;
+  saveDB();
+
+  res.json({ alliance });
+});
+
+app.post("/api/alliance/leave", auth, requireCompany, (req, res) => {
+  if (!req.company.allianceId)
+    return res.status(400).json({ error: "Not in an alliance" });
+
+  const alliance = db.alliances[req.company.allianceId];
+  if (alliance) {
+    alliance.members = alliance.members.filter(x => x !== req.user.id);
+    if (alliance.ownerId === req.user.id && alliance.members.length) {
+      alliance.ownerId = alliance.members[0];
+    }
+    if (alliance.members.length === 0) delete db.alliances[alliance.id];
+  }
+
+  req.company.allianceId = null;
+  saveDB();
+
+  res.json({ ok: true });
+});
+
+/* -------------------------------- Chat ---------------------------------- */
+
+function addChat(channel, user, message) {
+  db.chat[channel] ||= [];
+  const entry = {
+    id: id("msg"),
+    userId: user.id,
+    username: user.username,
+    message: String(message).slice(0, 500),
+    createdAt: now()
+  };
+
+  db.chat[channel].push(entry);
+  if (db.chat[channel].length > 200) db.chat[channel] = db.chat[channel].slice(-200);
+  return entry;
+}
+
+app.get("/api/chat/:channel", auth, (req, res) => {
+  const channel = String(req.params.channel || "global");
+  res.json({ messages: db.chat[channel] || [] });
+});
+
+app.post("/api/chat/:channel", auth, (req, res) => {
+  const channel = String(req.params.channel || "global").replace(/[^A-Za-z0-9_-]/g, "");
+  const message = String(req.body.message || "").trim();
+
+  if (!message) return res.status(400).json({ error: "Empty message" });
+
+  const entry = addChat(channel, req.user, message);
+  saveDB();
+
+  broadcast({
+    type: "chat",
+    channel,
+    message: entry
+  });
+
+  res.json({ message: entry });
+});
+
+/* ------------------------------ Admin reset ------------------------------ */
+/* Keep this endpoint disabled unless an ADMIN_KEY is configured. */
+
+app.post("/api/admin/reset", (req, res) => {
+  const key = req.headers["x-admin-key"];
+  if (!process.env.ADMIN_KEY || key !== process.env.ADMIN_KEY)
+    return res.status(403).json({ error: "Admin reset disabled or unauthorized" });
+
+  db = structuredClone(defaultDB);
+  saveDB();
+  res.json({ ok: true });
+});
+
+
+/* ======================= APK COMPATIBILITY API ========================
+ * Compatibility layer for the original Tycoon client protocol.
+ * The client calls GET /RestSimulator?Operation=<name>&... .
+ * This layer deliberately accepts both query-string and form/JSON parameters.
+ */
+
+if (!db.legacy) db.legacy = { nextCompanyId: 100000, companies: {}, alliances: {}, chats: [], countryChats: [], messages: [], bids: [], resolutions: [], wars: [], payments: [], referrals: [], donations: [] };
+const L = db.legacy;
+const qp = (req, key, fallback = "") => {
+  const v = req.query?.[key] ?? req.body?.[key];
+  return v === undefined || v === null ? fallback : Array.isArray(v) ? v[0] : String(v);
+};
+const num = (req, key, fallback = 0) => { const n = Number(qp(req,key,fallback)); return Number.isFinite(n) ? n : fallback; };
+const bool = (req,key,fallback=false) => ['1','true','yes','y'].includes(qp(req,key,String(fallback)).toLowerCase());
+const legacyCompany = idv => L.companies[String(idv)] || null;
+function ensureLegacyCompany(idv, seed={}) {
+  const key=String(idv);
+  if(!L.companies[key]) L.companies[key]={company_id:key, company_name:seed.company_name||`Company ${key}`, country:seed.country||'India', money:numObj(seed.money,100000), net_worth:numObj(seed.net_worth,100000), level:numObj(seed.level,1), economy_level:numObj(seed.economy_level,1), offensive_level:numObj(seed.offensive_level,1), world_rank:0, economy_rank:0, offensive_rank:0, alliance_id:0, latitude:numObj(seed.latitude,0), longitude:numObj(seed.longitude,0), company_latitude:numObj(seed.company_latitude,0), company_longitude:numObj(seed.company_longitude,0), update_time:Date.now(), date_time:'', app_entrance_counter:0, share_price:0, share_last_change:0, brand_points:0, time_mani_num:0, is_read:0, patriotism:0, army:{}, assets:{}, guards_transportation:0, guards_business:0, guards_resources:0, camera_business:0, camera_transportation:0, camera_resources:0, taxi:0,bus:0,train:0,cargo_airplane:0,passengers_plane:0,cargo_ship:0,passengers_ship:0, businesses:{}, resources:{salt:0,iron:0,aluminum:0,copper:0,silver:0,gold:0,diamonds:0,gems:0,oil:0}, created_at:Date.now()};
+  return L.companies[key];
+}
+function numObj(v,d){ const n=Number(v); return Number.isFinite(n)?n:d; }
+function ok(res,data={}) { res.json({result:'success',...data}); }
+function fail(res,message='failed') { res.json({result:'failed',message,error:message}); }
+function allParams(req){ return {...req.query,...(req.body||{})}; }
+function updateFromParams(c, req) {
+  const p=allParams(req); const scalar=['company_name','country','level','economy_level','economy_rank','offensive_level','offensive_rank','net_worth','money','company_latitude','company_longitude','update_time','world_rank','latitude','longitude','app_entrance_counter','share_price','share_last_change','guards_transportation','guards_business','guards_resources','camera_business','camera_transportation','camera_resources','taxi','bus','train','cargo_airplane','passengers_plane','cargo_ship','passengers_ship','mall','clothes_shop','supermarket','coffe_shop','coffee_shop','pub','movie_theater','fast_food','dance_club','restaurant','living_building','office_building','tank','fighter_plane','espionage_satellite','communication_satellite','defence_robot','smart_bombs','balistic_missiles','industrial_bots','KTZ9000','ZTZ9600','salt','iron','aluminum','copper','silver','gold','diamonds','gems','oil','is_read','date_time','time_mani_num','brand_points','patriotism'];
+  for(const k of scalar) if(p[k]!==undefined){ const n=Number(p[k]); c[k]=p[k]!=='' && Number.isFinite(n) ? n : p[k]; }
+  const businessKeys=['mall','clothes_shop','supermarket','coffe_shop','coffee_shop','pub','movie_theater','fast_food','dance_club','restaurant','living_building','office_building','tank','fighter_plane','espionage_satellite','communication_satellite','defence_robot','smart_bombs','balistic_missiles','industrial_bots','KTZ9000','ZTZ9600'];
+  for(const k of businessKeys) if(p[k]!==undefined) c.businesses[k]=numObj(p[k],0);
+  for(const k of ['salt','iron','aluminum','copper','silver','gold','diamonds','gems','oil']) if(p[k]!==undefined) c.resources[k]=numObj(p[k],0);
+  c.update_time=Date.now();
+}
+function legacyView(c){
+  return {...c, result:'success', alliance_id:c.alliance_id||0};
+}
+
+app.all(['/RestSimulator','/RestSimulator/*'], (req,res)=>{
+  const op=qp(req,'Operation','');
+  try {
+    switch(op){
+      case 'RegisterUser': {
+        const idv=String(L.nextCompanyId++); const c=ensureLegacyCompany(idv,{company_name:qp(req,'company_name','New Company'),country:qp(req,'country','India'),money:num(req,'money',100000),net_worth:num(req,'net_worth',100000),level:num(req,'level',1),economy_level:num(req,'economy_level',1),offensive_level:num(req,'offensive_level',1),latitude:num(req,'latitude',0),longitude:num(req,'longitude',0)}); updateFromParams(c,req); saveDB(); ok(res,{company_id:Number(idv),id:Number(idv),company_id_string:idv,company_name:c.company_name,country:c.country}); break;
+      }
+      case 'getUserData': { const c=ensureLegacyCompany(qp(req,'company_id','0')); ok(res,{...legacyView(c)}); break; }
+      case 'updateUserData': { const c=ensureLegacyCompany(qp(req,'company_id','0')); updateFromParams(c,req); saveDB(); ok(res,legacyView(c)); break; }
+      case 'updateUserId': { const old=qp(req,'company_id','0'), neu=qp(req,'user_id',qp(req,'new_user_id',old)); const c=ensureLegacyCompany(old); L.companies[String(neu)]={...c,company_id:String(neu)}; delete L.companies[String(old)]; saveDB(); ok(res,{company_id:neu}); break; }
+      case 'UpdateUserName': { const c=ensureLegacyCompany(qp(req,'company_id','0')); c.company_name=qp(req,'company_name',c.company_name); saveDB(); ok(res,{company_name:c.company_name}); break; }
+      case 'UpdateUserLocation': { const c=ensureLegacyCompany(qp(req,'company_id','0')); c.latitude=num(req,'latitude',c.latitude); c.longitude=num(req,'longitude',c.longitude); c.company_latitude=num(req,'company_latitude',c.company_latitude); c.company_longitude=num(req,'company_longitude',c.company_longitude); saveDB(); ok(res,{latitude:c.latitude,longitude:c.longitude}); break; }
+      case 'UpdateOneSignalUserId': ok(res); break;
+      case 'getCountryData': { const country=qp(req,'country','India'); const companies=Object.values(L.companies).filter(c=>String(c.country).toLowerCase()===country.toLowerCase()); ok(res,{country,companies_count:companies.length,companies,players:companies.length}); break; }
+      case 'getRelevantCompanies': case 'getSameLevelCompanies': case 'getCompanyByCountryAndLevel': { let a=Object.values(L.companies); const country=qp(req,'country',''); const level=num(req,'level',0); if(country) a=a.filter(c=>c.country===country); if(level) a=a.filter(c=>Number(c.level)===level); ok(res,{companies:a}); break; }
+      case 'getAlliancesByCountry': { const country=qp(req,'country',''); ok(res,{alliances:Object.values(L.alliances).filter(a=>!country||a.country===country)}); break; }
+      case 'createAlliance': { const idv=String(L.nextCompanyId++); const a={alliance_id:Number(idv),name:qp(req,'alliance_name',qp(req,'name','Alliance')),country:qp(req,'country','India'),owner_id:qp(req,'company_id','0'),members:[qp(req,'company_id','0')],created_at:Date.now()}; L.alliances[idv]=a; const c=ensureLegacyCompany(qp(req,'company_id','0')); c.alliance_id=Number(idv); saveDB(); ok(res,{alliance_id:a.alliance_id,alliance:a}); break; }
+      case 'joinAlliance': { const aid=qp(req,'alliance_id','0'), a=L.alliances[aid]; if(!a) return fail(res,'Alliance not found'); const cid=qp(req,'company_id','0'); if(!a.members.includes(cid)) a.members.push(cid); ensureLegacyCompany(cid).alliance_id=Number(aid); saveDB(); ok(res,{alliance:a}); break; }
+      case 'leaveAlliance': case 'removeFromAlliance': { const aid=qp(req,'alliance_id','0'),a=L.alliances[aid]; const cid=qp(req,'company_id','0'); if(a) a.members=a.members.filter(x=>String(x)!==String(cid)); const c=ensureLegacyCompany(cid); c.alliance_id=0; saveDB(); ok(res,{alliance:a||null}); break; }
+      case 'updateAlliance': { const aid=qp(req,'alliance_id','0'),a=L.alliances[aid]||{alliance_id:Number(aid),members:[]}; for(const k of ['name','alliance_name','description','country']) if(qp(req,k,'')) a[k]=qp(req,k,''); L.alliances[aid]=a; saveDB(); ok(res,{alliance:a}); break; }
+      case 'InviteToAlliance': case 'sendMessageToAlliance': { ok(res,{message_id:Date.now(),sent:true}); break; }
+      case 'getAllianceDetails': { const a=L.alliances[qp(req,'alliance_id','0')]; ok(res,{alliance:a||null,members:a?.members||[]}); break; }
+      case 'getAlliancesRankings': { ok(res,{alliances:Object.values(L.alliances).sort((a,b)=>b.members.length-a.members.length)}); break; }
+      case 'getAllianceCompetitionResult': case 'alliance_battle_score': { ok(res,{score:0,results:[],alliances:Object.values(L.alliances)}); break; }
+      case 'getAllianceMessages': { const aid=qp(req,'alliance_id','0'); ok(res,{messages:L.chats.filter(x=>String(x.alliance_id)===String(aid)).slice(-100)}); break; }
+      case 'insertToChatMessages': case 'insertToCountryChatMessages': case 'sendMessageToAlliance': { const x={id:Date.now(),company_id:qp(req,'company_id','0'),company_name:qp(req,'company_name',''),message:qp(req,'message',qp(req,'text','')),country:qp(req,'country','India'),alliance_id:qp(req,'alliance_id','0'),date_time:Date.now()}; (op==='insertToCountryChatMessages'?L.countryChats:L.chats).push(x); saveDB(); ok(res,{message:x}); break; }
+      case 'fetcChatMessages': case 'fetcCountryChatMessages': { const arr=op==='fetcCountryChatMessages'?L.countryChats:L.chats; ok(res,{messages:arr.slice(-100)}); break; }
+      case 'getUserArmy': { const c=ensureLegacyCompany(qp(req,'company_id','0')); ok(res,{army:c.army||{}}); break; }
+      case 'updateArmy': { const c=ensureLegacyCompany(qp(req,'company_id','0')); c.army={...(c.army||{}),...allParams(req)}; saveDB(); ok(res,{army:c.army}); break; }
+      case 'ArmyAttack': { const attacker=ensureLegacyCompany(qp(req,'company_id','0')); const target=qp(req,'target_company_id',qp(req,'defender_id','')); const defender=target?ensureLegacyCompany(target):null; ok(res,{success:true,result:'success',attacker_company_id:attacker.company_id,target_company_id:target,battle_result:'resolved',damage:0,war_id:Date.now()}); break; }
+      case 'getWarsByCountry': ok(res,{wars:L.wars.filter(w=>!qp(req,'country','')||w.country===qp(req,'country',''))}); break;
+      case 'getRunningContracts': ok(res,{contracts:Object.values(db.contracts||{}).filter(c=>c.status==='open')}); break;
+      case 'getContractsStatus': ok(res,{contracts:Object.values(db.contracts||{})}); break;
+      case 'postBid': { const b={id:Date.now(),company_id:qp(req,'company_id','0'),contract_id:qp(req,'contract_id','0'),bid:num(req,'bid',num(req,'amount',0)),created_at:Date.now()}; L.bids.push(b); saveDB(); ok(res,{bid:b}); break; }
+      case 'getBidRanking': ok(res,{bids:L.bids.slice(-100).sort((a,b)=>a.bid-b.bid)}); break;
+      case 'postResolution': { const r={id:Date.now(),company_id:qp(req,'company_id','0'),title:qp(req,'title','Resolution'),description:qp(req,'description',''),votes_for:0,votes_against:0,status:'active',created_at:Date.now()}; L.resolutions.push(r); saveDB(); ok(res,{resolution:r}); break; }
+      case 'voteOnResolution': { const r=L.resolutions.find(x=>String(x.id)===String(qp(req,'resolution_id',''))); if(!r) return fail(res,'Resolution not found'); if(bool(req,'vote',false)||qp(req,'choice','').toLowerCase()==='for') r.votes_for++; else r.votes_against++; saveDB(); ok(res,{resolution:r}); break; }
+      case 'getActiveResolutions': ok(res,{resolutions:L.resolutions.filter(r=>r.status==='active')}); break;
+      case 'GetResourcesPrices': ok(res,{resources:{salt:100,iron:250,aluminum:300,copper:350,silver:1000,gold:5000,diamonds:15000,gems:2500,oil:750}}); break;
+      case 'fetchProductsPrices': ok(res,{products:{restaurant:10000,mall:500000,clothes_shop:50000,supermarket:75000,coffe_shop:25000,pub:100000,movie_theater:250000,fast_food:40000,dance_club:150000}}); break;
+      case 'getConcessionsTrends': ok(res,{trends:[]}); break;
+      case 'getPropertiesMeta': ok(res,{properties:{}}); break;
+      case 'checkForConfigurationUpdate': ok(res,{is_changed:false,server_ip:'tycoon-empire-i40v.onrender.com',server_port:443}); break;
+      case 'checkForBackup': ok(res,{is_changed:false}); break;
+      case 'getUpdates': ok(res,{updates:[]}); break;
+      case 'recordTimeMani': { const c=ensureLegacyCompany(qp(req,'company_id','0')); c.time_mani_num=num(req,'time_mani_num',c.time_mani_num); saveDB(); ok(res,{time_mani_num:c.time_mani_num}); break; }
+      case 'updateCompanyPatriotsm': { const c=ensureLegacyCompany(qp(req,'company_id','0')); c.patriotism=num(req,'patriotism',num(req,'company_patriotism',c.patriotism)); saveDB(); ok(res,{patriotism:c.patriotism}); break; }
+      case 'postDonation': case 'InsertIntoPayments': case 'InsertRefferal': case 'InsertToMessagesTable': { L.payments.push({operation:op,company_id:qp(req,'company_id','0'),params:allParams(req),created_at:Date.now()}); saveDB(); ok(res,{saved:true}); break; }
+      case 'CheckBannedExp': ok(res,{is_banned:false,result:'success'}); break;
+      case 'CheckCoupon': ok(res,{valid:false,result:'success'}); break;
+      case 'CheckGoldCoinsGift': ok(res,{gold_coins:0,result:'success'}); break;
+      default: ok(res,{operation:op,message:'Operation accepted',data:{}});
+    }
+  } catch(e) { console.error('RestSimulator',op,e); fail(res,e.message); }
+});
+
+/* ------------------------------- WebSocket ------------------------------- */
+
+const sockets = new Set();
+
+function broadcast(payload) {
+  const text = JSON.stringify(payload);
+  for (const ws of sockets) {
+    if (ws.readyState === 1) {
+      try { ws.send(text); } catch {}
+    }
+  }
+}
+
+server.on("upgrade", (request, socket, head) => {
+  const url = new URL(request.url, `http://${request.headers.host}`);
+  if (url.pathname !== "/ws") {
+    socket.destroy();
+    return;
+  }
+
+  const token = url.searchParams.get("token");
+  try {
+    const decoded = jwt.verify(token || "", JWT_SECRET);
+    const user = db.users[decoded.userId];
+    if (!user) throw new Error("invalid user");
+
+    wss.handleUpgrade(request, socket, head, ws => {
+      ws.user = user;
+      wss.emit("connection", ws, request);
+    });
+  } catch {
+    socket.destroy();
+  }
+});
+
+wss.on("connection", ws => {
+  sockets.add(ws);
+
+  ws.send(JSON.stringify({
+    type: "connected",
+    serverTime: now(),
+    user: cleanUser(ws.user),
+    company: publicCompany(getCompany(ws.user.id))
+  }));
+
+  ws.on("message", raw => {
+    try {
+      const packet = JSON.parse(raw.toString());
+
+      if (packet.type === "ping") {
+        ws.send(JSON.stringify({ type: "pong", serverTime: now() }));
+        return;
+      }
+
+      if (packet.type === "chat") {
+        const channel = String(packet.channel || "global").replace(/[^A-Za-z0-9_-]/g, "");
+        const message = String(packet.message || "").trim();
+        if (!message) return;
+
+        const entry = addChat(channel, ws.user, message);
+        saveDB();
+
+        broadcast({
+          type: "chat",
+          channel,
+          message: entry
+        });
+      }
+    } catch {
+      ws.send(JSON.stringify({ type: "error", error: "Invalid WebSocket packet" }));
     }
   });
+
+  ws.on("close", () => sockets.delete(ws));
 });
 
-app.post("/", (req, res, next) => {
-  if (getOperation(req)) {
-    return operationRouter(req, res);
-  }
+/* --------------------------- Automatic income ---------------------------- */
+/*
+ * We do not add money every second. Instead, the company stores lastIncomeAt
+ * and income is calculated when the player reconnects/opens company data.
+ * This prevents a server restart from stopping passive income.
+ */
 
-  return res.json({
-    success: true,
-    status: "online"
-  });
-});
+setInterval(() => {
+  // Persist recent state periodically.
+  saveDB();
+}, 30000);
 
-/* =========================================================
-   ERROR HANDLER
-   ========================================================= */
-
-app.use((err, req, res, next) => {
-  console.error("SERVER ERROR:", err);
-
-  if (res.headersSent) {
-    return next(err);
-  }
-
-  return res.status(500).json({
-    success: false,
-    error: "Internal server error"
-  });
-});
-
-/* =========================================================
-   START SERVER
-   ========================================================= */
-
-app.listen(PORT, HOST, () => {
-  console.log(
-    `Entrepreneur server running on http://${HOST}:${PORT}`
-  );
-
-  console.log(
-    `APK endpoint: /RestSimulator`
-  );
-
-  console.log(
-    `Health endpoint: /health`
-  );
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Private game server running on 0.0.0.0:${PORT}`);
+  console.log(`Health: http://localhost:${PORT}/health`);
 });
