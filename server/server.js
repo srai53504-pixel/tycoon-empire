@@ -210,7 +210,7 @@ app.get("/api", (req, res) => {
     operation === "getglobalranking" ||
     operation === "getranking"
   ) {
-    return res.json(rankingResponse(req));
+    return res.json(rankingResponse(req).rankings);
   }
 
   if (
