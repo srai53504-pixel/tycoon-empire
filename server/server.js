@@ -220,18 +220,22 @@ app.get("/api", (req, res) => {
     operation === "getalliancesrankings" ||
     operation === "getalliancerankings"
   ) {
+    const data = publicCompany(company, index >= 0 ? index + 1 : null);
     return res.json({
       result: "success",
-      rankings: [],
-      total: 0
+      ceo: data,
+      company: data,
+      ...data
     });
   }
 
   if (operation === "getbidranking") {
+    const data = publicCompany(company, index >= 0 ? index + 1 : null);
     return res.json({
       result: "success",
-      rankings: [],
-      total: 0
+      ceo: data,
+      company: data,
+      ...data
     });
   }
 
@@ -265,15 +269,12 @@ function updateRanking(req, res) {
       x => x.companyId === company.companyId
     );
 
+    const data = publicCompany(company, index >= 0 ? index + 1 : null);
     return res.json({
       result: "success",
-      message: "Global ranking updated",
-      rank: index >= 0 ? index + 1 : null,
-      company: publicCompany(
-        company,
-        index >= 0 ? index + 1 : null
-      ),
-      total: rows.length
+      ceo: data,
+      company: data,
+      ...data
     });
   } catch (error) {
     return res.status(400).json({
@@ -318,10 +319,13 @@ app.get("/api/:companyId", (req, res) => {
   }
   const rows = sortedCompanies();
   const index = rows.findIndex(x => x.companyId === company.companyId);
-  return res.json({
-    result: "success",
-    company: publicCompany(company, index >= 0 ? index + 1 : null)
-  });
+    const data = publicCompany(company, index >= 0 ? index + 1 : null);
+    return res.json({
+      result: "success",
+      ceo: data,
+      company: data,
+      ...data
+    });
 });
 
 app.get("/api/company/:companyId", (req, res) => {
