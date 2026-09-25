@@ -311,6 +311,19 @@ app.post("/api", (req, res) => {
 });
 
 // Individual company lookup.
+app.get("/api/:companyId", (req, res) => {
+  const company = companies.get(str(req.params.companyId));
+  if (!company) {
+    return res.status(404).json({ result: "error", error: "Company not found" });
+  }
+  const rows = sortedCompanies();
+  const index = rows.findIndex(x => x.companyId === company.companyId);
+  return res.json({
+    result: "success",
+    company: publicCompany(company, index >= 0 ? index + 1 : null)
+  });
+});
+
 app.get("/api/company/:companyId", (req, res) => {
   const company = companies.get(str(req.params.companyId));
 
