@@ -1,21 +1,17 @@
 {
-  "name": "tycoon-global-ranking-server",
+  "name": "tycoon-empire-server",
   "version": "1.0.0",
   "private": true,
-  "description": "Private server for global CEO/company rankings for a Tycoon Android game",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1"
   }
 }
