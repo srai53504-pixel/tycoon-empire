@@ -5,373 +5,674 @@ const app = express();
 const PORT = Number(process.env.PORT || 10000);
 
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Simple in-memory ranking store.
-// This version intentionally uses no PostgreSQL/JWT/bcrypt so it will start
-// even when Render has only the dependencies in the current package.json.
+/*
+ * ============================================================
+ * TYCOON EMPIRE - APK COMPATIBILITY SERVER
+ * ============================================================
+ *
+ * APK base URL:
+ * https://tycoon-empire-i40v.onrender.com/api
+ *
+ * Confirmed from RestHttpClient:
+ *
+ * GET /api/<company_id>
+ * GET /api?Operation=getCEORanking
+ * GET /api/company_update/?company_id=<id>
+ * GET /api/country_relations/top
+ * GET /api/wars/<war_id>/contributors
+ *
+ * PUT /api
+ * PUT /api/country_relations/bulk
+ *
+ * The APK sends the complete CEO object as JSON to PUT /api.
+ *
+ * This version keeps data in memory so it works immediately
+ * without requiring a PostgreSQL database.
+ * ============================================================
+ */
+
 const companies = new Map();
+const countryRelations = new Map();
+const companyUpdates = new Map();
+const warContributors = new Map();
 
-function str(v, fallback = "") {
-  return v === undefined || v === null ? fallback : String(v).trim();
-}
+/* ------------------------------------------------------------
+ * Helpers
+ * ---------------------------------------------------------- */
 
-function num(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function integer(v, fallback = 0) {
-  const n = Math.trunc(Number(v));
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function normalizeCompany(body) {
-  const companyId = str(
-    body.companyId ??
-    body.company_id ??
-    body.companyID ??
-    body.id ??
-    body.userId ??
-    body.user_id
-  );
-
-  if (!companyId) {
-    throw new Error("companyId is required");
-  }
-
-  return {
-    companyId,
-    ownerId: str(body.ownerId ?? body.owner_id ?? body.userId ?? body.user_id),
-    companyName: str(
-      body.companyName ??
-      body.company_name ??
-      body.name,
-      "My Company"
-    ),
-    country: str(body.country),
-    countryCode: str(body.countryCode ?? body.country_code),
-    avatar: str(body.avatar ?? body.avatarUrl ?? body.avatar_url),
-    level: Math.max(0, integer(body.level ?? body.companyLevel)),
-    xp: Math.max(0, num(body.xp ?? body.experience)),
-    netWorth: Math.max(
-      0,
-      num(
-        body.netWorth ??
-        body.net_worth ??
-        body.companyValue ??
-        body.company_value ??
-        body.value
-      )
-    ),
-    cash: Math.max(0, num(body.cash ?? body.money ?? body.balance)),
-    revenue: Math.max(0, num(body.revenue)),
-    employees: Math.max(0, integer(body.employees)),
-    allianceId: str(body.allianceId ?? body.alliance_id),
-    updatedAt: new Date().toISOString()
-  };
-}
-
-// Server calculates the ranking score.
-// The client does NOT provide a rank position.
-function score(company) {
-  return (
-    company.netWorth +
-    company.level * 1000000 +
-    company.xp * 0.01
-  );
-}
-
-function sortedCompanies() {
-  return [...companies.values()].sort((a, b) => {
-    const scoreDiff = score(b) - score(a);
-    if (scoreDiff !== 0) return scoreDiff;
-
-    const worthDiff = b.netWorth - a.netWorth;
-    if (worthDiff !== 0) return worthDiff;
-
-    const levelDiff = b.level - a.level;
-    if (levelDiff !== 0) return levelDiff;
-
-    return a.companyId.localeCompare(b.companyId, undefined, {
-      numeric: true
-    });
-  });
-}
-
-function publicCompany(company, rank) {
-  return {
-    rank,
-    companyId: company.companyId,
-    ownerId: company.ownerId,
-    companyName: company.companyName,
-    name: company.name ?? company.ownerId ?? "",
-    prestige: company.prestige ?? company.netWorth ?? 0,
-    avatarUrl: company.avatarUrl ?? company.avatar ?? "",
-    country: company.country,
-    countryCode: company.countryCode,
-    avatar: company.avatar,
-    level: company.level,
-    xp: company.xp,
-    netWorth: company.netWorth,
-    cash: company.cash,
-    revenue: company.revenue,
-    employees: company.employees,
-    allianceId: company.allianceId,
-    rankingScore: Math.round(score(company)),
-    updatedAt: company.updatedAt
-  };
-}
-
-function getLimit(value) {
-  return Math.min(100, Math.max(1, integer(value, 50)));
-}
-
-function getOffset(value) {
-  return Math.max(0, integer(value, 0));
-}
-
-function rankingResponse(req) {
-  const limit = getLimit(req.query.limit);
-  const offset = getOffset(req.query.offset);
-
-  let rows = sortedCompanies();
-
-  const country = str(req.query.country);
-  const countryCode = str(req.query.countryCode ?? req.query.country_code);
-
-  if (country) {
-    rows = rows.filter(x => x.country === country);
-  }
-
-  if (countryCode) {
-    rows = rows.filter(x => x.countryCode === countryCode);
-  }
-
-  const total = rows.length;
-  const page = rows.slice(offset, offset + limit);
-
-  return {
-    result: "success",
-    rankings: page.map((company, index) =>
-      publicCompany(company, offset + index + 1)
-    ),
-    total,
-    limit,
-    offset,
-    generatedAt: new Date().toISOString()
-  };
-}
-
-// Health check
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    result: "success",
-    status: "online",
-    service: "tycoon-global-ranking-server",
-    database: "in-memory",
-    time: new Date().toISOString()
-  });
-});
-
-// Root
-app.get("/", (req, res) => {
-  res.json({
-    result: "success",
-    service: "Tycoon Global Ranking Server",
-    status: "online",
-    endpoints: [
-      "GET /health",
-      "GET /api/rankings",
-      "GET /api/global-ranking",
-      "GET /api?Operation=getCEORanking",
-      "POST /api/rankings/upsert",
-      "POST /api?Operation=updateCompanyRanking"
-    ]
-  });
-});
-
-// Normal ranking endpoint
-app.get("/api/rankings", (req, res) => {
-  res.json(rankingResponse(req));
-});
-
-// Alias
-app.get("/api/global-ranking", (req, res) => {
-  res.json(rankingResponse(req));
-});
-
-// Compatibility with the game's operation-style API.
-app.get("/api", (req, res) => {
-  const operation = str(
-    req.query.Operation ?? req.query.operation
-  ).toLowerCase();
-
-  if (
-    operation === "getceoranking" ||
-    operation === "getglobalranking" ||
-    operation === "getranking"
-  ) {
-    return res.json(rankingResponse(req).rankings);
-  }
-
-  if (
-    operation === "getalliancesrankings" ||
-    operation === "getalliancerankings"
-  ) {
-    const data = publicCompany(company, index >= 0 ? index + 1 : null);
-    return res.json({
-      result: "success",
-      ceo: data,
-      company: data,
-      ...data
-    });
-  }
-
-  if (operation === "getbidranking") {
-    const data = publicCompany(company, index >= 0 ? index + 1 : null);
-    return res.json({
-      result: "success",
-      ceo: data,
-      company: data,
-      ...data
-    });
-  }
-
-  return res.status(404).json({
-    result: "error",
-    error: "Unknown Operation"
-  });
-});
-
-// Insert/update a company in the global ranking.
-function updateRanking(req, res) {
-  try {
-    const company = normalizeCompany(req.body);
-
-    // Basic sanity protection.
-    if (
-      company.level > 1000000 ||
-      company.xp > 1000000000000000 ||
-      company.netWorth > 1000000000000000000
-    ) {
-      return res.status(400).json({
-        result: "error",
-        error: "Invalid ranking values"
-      });
+function str(value, fallback = "") {
+    if (value === undefined || value === null) {
+        return fallback;
     }
 
-    companies.set(company.companyId, company);
-
-    const rows = sortedCompanies();
-    const index = rows.findIndex(
-      x => x.companyId === company.companyId
-    );
-
-    const data = publicCompany(company, index >= 0 ? index + 1 : null);
-    return res.json({
-      result: "success",
-      ceo: data,
-      company: data,
-      ...data
-    });
-  } catch (error) {
-    return res.status(400).json({
-      result: "error",
-      error: error.message
-    });
-  }
+    return String(value).trim();
 }
 
-app.post("/api/rankings/upsert", updateRanking);
-app.post("/api/rankings/update", updateRanking);
+function num(value, fallback = 0) {
+    const n = Number(value);
 
-// Compatibility with operation-style POST requests.
-app.post("/api", (req, res) => {
-  const operation = str(
-    req.query.Operation ??
-    req.query.operation ??
-    req.body.Operation ??
-    req.body.operation
-  ).toLowerCase();
+    return Number.isFinite(n) ? n : fallback;
+}
 
-  if (
-    operation === "updatecompanyranking" ||
-    operation === "updateceoranking" ||
-    operation === "upsertranking" ||
-    operation === "upsertcompany"
-  ) {
-    return updateRanking(req, res);
-  }
+function int(value, fallback = 0) {
+    const n = Math.trunc(Number(value));
 
-  return res.status(404).json({
-    result: "error",
-    error: "Unknown Operation"
-  });
-});
+    return Number.isFinite(n) ? n : fallback;
+}
 
-// Individual company lookup.
+function first(obj, keys, fallback = undefined) {
+    for (const key of keys) {
+        if (
+            obj &&
+            Object.prototype.hasOwnProperty.call(obj, key) &&
+            obj[key] !== undefined &&
+            obj[key] !== null
+        ) {
+            return obj[key];
+        }
+    }
+
+    return fallback;
+}
+
+/* ------------------------------------------------------------
+ * CEO normalization
+ * ---------------------------------------------------------- */
+
+function normalizeCEO(body) {
+    if (!body || typeof body !== "object") {
+        throw new Error("Invalid CEO JSON");
+    }
+
+    /*
+     * The actual APK serializes the CEO object using Gson.
+     * Therefore we preserve the original JSON while also
+     * extracting ranking fields.
+     */
+
+    const companyId = str(
+        first(body, [
+            "company_id",
+            "companyId",
+            "companyID",
+            "id"
+        ])
+    );
+
+    if (!companyId) {
+        throw new Error("CEO company_id is missing");
+    }
+
+    const companyName = str(
+        first(body, [
+            "company_name",
+            "companyName",
+            "name"
+        ]),
+        "Company " + companyId
+    );
+
+    const country = str(
+        first(body, [
+            "country",
+            "company_country",
+            "player_country"
+        ])
+    );
+
+    const level = Math.max(
+        0,
+        int(
+            first(body, [
+                "level",
+                "company_level",
+                "companyLevel"
+            ]),
+            0
+        )
+    );
+
+    const xp = Math.max(
+        0,
+        num(
+            first(body, [
+                "xp",
+                "experience",
+                "experience_points"
+            ]),
+            0
+        )
+    );
+
+    const netWorth = Math.max(
+        0,
+        num(
+            first(body, [
+                "net_worth",
+                "netWorth",
+                "company_value",
+                "companyValue",
+                "prestige"
+            ]),
+            0
+        )
+    );
+
+    const cash = Math.max(
+        0,
+        num(
+            first(body, [
+                "cash",
+                "money",
+                "balance"
+            ]),
+            0
+        )
+    );
+
+    const prestige = Math.max(
+        0,
+        num(
+            first(body, [
+                "prestige",
+                "net_worth",
+                "netWorth"
+            ]),
+            netWorth
+        )
+    );
+
+    return {
+        ...body,
+
+        company_id: companyId,
+        companyId: companyId,
+
+        company_name: companyName,
+        companyName: companyName,
+
+        country,
+
+        level,
+        xp,
+
+        net_worth: netWorth,
+        netWorth,
+
+        cash,
+
+        prestige,
+
+        updated_at: new Date().toISOString()
+    };
+}
+
+/* ------------------------------------------------------------
+ * Ranking
+ * ---------------------------------------------------------- */
+
+function rankingScore(ceo) {
+    const prestige = num(ceo.prestige, 0);
+    const netWorth = num(ceo.net_worth ?? ceo.netWorth, 0);
+    const level = int(ceo.level, 0);
+    const xp = num(ceo.xp, 0);
+
+    /*
+     * We do NOT accept a client supplied "rank".
+     * Rank is calculated by the server.
+     */
+
+    return (
+        prestige +
+        netWorth +
+        level * 1000000 +
+        xp * 0.01
+    );
+}
+
+function getSortedCompanies() {
+    return [...companies.values()].sort((a, b) => {
+        const scoreDifference =
+            rankingScore(b) - rankingScore(a);
+
+        if (scoreDifference !== 0) {
+            return scoreDifference;
+        }
+
+        const worthDifference =
+            num(b.net_worth ?? b.netWorth) -
+            num(a.net_worth ?? a.netWorth);
+
+        if (worthDifference !== 0) {
+            return worthDifference;
+        }
+
+        return String(a.company_id).localeCompare(
+            String(b.company_id),
+            undefined,
+            { numeric: true }
+        );
+    });
+}
+
+/*
+ * Return the original CEO fields plus ranking information.
+ * Keeping the original fields is useful because Gson-based
+ * APK code may expect fields that are not directly used by
+ * the ranking screen.
+ */
+
+function rankedCEO(ceo, rank) {
+    return {
+        ...ceo,
+
+        rank,
+        ranking: rank,
+
+        company_id: ceo.company_id,
+        companyId: ceo.company_id,
+
+        company_name: ceo.company_name,
+        companyName: ceo.company_name,
+
+        prestige: num(ceo.prestige, 0),
+        net_worth: num(
+            ceo.net_worth ?? ceo.netWorth,
+            0
+        ),
+
+        ranking_score: Math.round(rankingScore(ceo)),
+        rankingScore: Math.round(rankingScore(ceo))
+    };
+}
+
+/* ------------------------------------------------------------
+ * GET /api/<company_id>
+ *
+ * APK:
+ * GetCEOData()
+ * ---------------------------------------------------------- */
+
 app.get("/api/:companyId", (req, res) => {
-  const company = companies.get(str(req.params.companyId));
-  if (!company) {
-    return res.status(404).json({ result: "error", error: "Company not found" });
-  }
-  const rows = sortedCompanies();
-  const index = rows.findIndex(x => x.companyId === company.companyId);
-    const data = publicCompany(company, index >= 0 ? index + 1 : null);
-    return res.json({
-      result: "success",
-      ceo: data,
-      company: data,
-      ...data
-    });
+    const companyId = str(req.params.companyId);
+
+    const company = companies.get(companyId);
+
+    if (!company) {
+        return res.status(404).json({
+            result: "error",
+            error: "Company not found",
+            company_id: companyId
+        });
+    }
+
+    const rows = getSortedCompanies();
+
+    const index = rows.findIndex(
+        x => x.company_id === companyId
+    );
+
+    return res.status(200).json(
+        rankedCEO(
+            company,
+            index >= 0 ? index + 1 : 0
+        )
+    );
 });
 
-app.get("/api/company/:companyId", (req, res) => {
-  const company = companies.get(str(req.params.companyId));
+/* ------------------------------------------------------------
+ * GET /api?Operation=getCEORanking
+ *
+ * APK:
+ * GetCEORanks()
+ * ---------------------------------------------------------- */
 
-  if (!company) {
+app.get("/api", (req, res) => {
+    const operation = str(
+        req.query.Operation ??
+        req.query.operation
+    ).toLowerCase();
+
+    if (
+        operation === "getceoranking" ||
+        operation === "getceoranks" ||
+        operation === "getglobalranking" ||
+        operation === "getranking"
+    ) {
+        const rows = getSortedCompanies();
+
+        const limit = Math.min(
+            100,
+            Math.max(
+                1,
+                int(req.query.limit, 100)
+            )
+        );
+
+        const offset = Math.max(
+            0,
+            int(req.query.offset, 0)
+        );
+
+        const page = rows.slice(
+            offset,
+            offset + limit
+        );
+
+        /*
+         * Important:
+         *
+         * The original game method directly passes
+         * RequestParams to this GET request. We therefore
+         * return a JSON ARRAY here rather than wrapping it
+         * in { rankings: [...] }.
+         */
+
+        return res.status(200).json(
+            page.map(
+                (company, index) =>
+                    rankedCEO(
+                        company,
+                        offset + index + 1
+                    )
+            )
+        );
+    }
+
+    /*
+     * The APK's SendCEOData uses PUT /api, not GET.
+     */
+
     return res.status(404).json({
-      result: "error",
-      error: "Company not found"
+        result: "error",
+        error: "Unknown Operation"
     });
-  }
-
-  const rows = sortedCompanies();
-  const index = rows.findIndex(
-    x => x.companyId === company.companyId
-  );
-
-  res.json({
-    result: "success",
-    company: publicCompany(
-      company,
-      index >= 0 ? index + 1 : null
-    )
-  });
 });
 
-// Unknown route
+/* ------------------------------------------------------------
+ * PUT /api
+ *
+ * APK:
+ * SendCEOData()
+ *
+ * Gson -> JSON -> HTTP PUT
+ * ---------------------------------------------------------- */
+
+app.put("/api", (req, res) => {
+    try {
+        const ceo = normalizeCEO(req.body);
+
+        companies.set(
+            ceo.company_id,
+            ceo
+        );
+
+        const rows = getSortedCompanies();
+
+        const index = rows.findIndex(
+            x => x.company_id === ceo.company_id
+        );
+
+        const result = rankedCEO(
+            ceo,
+            index >= 0 ? index + 1 : 0
+        );
+
+        console.log(
+            `[CEO UPDATE] ${ceo.company_id} - ${ceo.company_name}`
+        );
+
+        return res.status(200).json(result);
+
+    } catch (error) {
+        console.error(
+            "[PUT /api]",
+            error
+        );
+
+        return res.status(400).json({
+            result: "error",
+            error: error.message
+        });
+    }
+});
+
+/* ------------------------------------------------------------
+ * POST compatibility
+ * ---------------------------------------------------------- */
+
+app.post("/api", (req, res) => {
+    const operation = str(
+        req.query.Operation ??
+        req.query.operation ??
+        req.body?.Operation ??
+        req.body?.operation
+    ).toLowerCase();
+
+    if (
+        operation === "updatecompanyranking" ||
+        operation === "updateceoranking" ||
+        operation === "upsertranking" ||
+        operation === "upsertcompany"
+    ) {
+        try {
+            const ceo = normalizeCEO(req.body);
+
+            companies.set(
+                ceo.company_id,
+                ceo
+            );
+
+            return res.status(200).json(ceo);
+
+        } catch (error) {
+            return res.status(400).json({
+                result: "error",
+                error: error.message
+            });
+        }
+    }
+
+    return res.status(404).json({
+        result: "error",
+        error: "Unknown Operation"
+    });
+});
+
+/* ------------------------------------------------------------
+ * COMPANY UPDATES
+ *
+ * APK:
+ * GET /api/company_update/?company_id=<id>
+ * ---------------------------------------------------------- */
+
+app.get(
+    "/api/company_update/",
+    (req, res) => {
+        const companyId = str(
+            req.query.company_id ??
+            req.query.companyId
+        );
+
+        const update =
+            companyUpdates.get(companyId);
+
+        if (!update) {
+            return res.status(200).json([]);
+        }
+
+        return res.status(200).json(update);
+    }
+);
+
+/* ------------------------------------------------------------
+ * COUNTRY RELATION TOP
+ *
+ * APK:
+ * GET /api/country_relations/top?
+ * ---------------------------------------------------------- */
+
+app.get(
+    "/api/country_relations/top",
+    (req, res) => {
+        const rows = [
+            ...countryRelations.values()
+        ];
+
+        rows.sort(
+            (a, b) =>
+                num(b.score) -
+                num(a.score)
+        );
+
+        return res.status(200).json(
+            rows
+        );
+    }
+);
+
+/* ------------------------------------------------------------
+ * COUNTRY RELATION UPDATE
+ *
+ * APK:
+ * PUT /api/country_relations/bulk
+ * ---------------------------------------------------------- */
+
+app.put(
+    "/api/country_relations/bulk",
+    (req, res) => {
+        const companyId = str(
+            req.query.company_id
+        );
+
+        const companyName = str(
+            req.query.company_name
+        );
+
+        const companyCountry = str(
+            req.query.company_country
+        );
+
+        const body =
+            req.body &&
+            typeof req.body === "object"
+                ? req.body
+                : {};
+
+        const record = {
+            ...body,
+
+            company_id: companyId,
+            company_name: companyName,
+            company_country: companyCountry,
+
+            updated_at:
+                new Date().toISOString()
+        };
+
+        countryRelations.set(
+            companyId,
+            record
+        );
+
+        return res.status(200).json({
+            result: "success",
+            ...record
+        });
+    }
+);
+
+/* ------------------------------------------------------------
+ * WAR CONTRIBUTORS
+ *
+ * APK:
+ * GET /api/wars/<war_id>/contributors?
+ * ---------------------------------------------------------- */
+
+app.get(
+    "/api/wars/:warId/contributors",
+    (req, res) => {
+        const warId = str(
+            req.params.warId
+        );
+
+        const contributors =
+            warContributors.get(warId);
+
+        if (!contributors) {
+            return res.status(200).json([]);
+        }
+
+        return res.status(200).json(
+            contributors
+        );
+    }
+);
+
+/* ------------------------------------------------------------
+ * Useful development endpoints
+ * ---------------------------------------------------------- */
+
+app.get("/health", (req, res) => {
+    res.status(200).json({
+        result: "success",
+        status: "online",
+        service: "tycoon-empire",
+        companies: companies.size,
+        countryRelations: countryRelations.size,
+        wars: warContributors.size,
+        time: new Date().toISOString()
+    });
+});
+
+app.get("/", (req, res) => {
+    res.status(200).json({
+        result: "success",
+        service: "Tycoon Empire API",
+        status: "online",
+        api: "/api"
+    });
+});
+
+/* ------------------------------------------------------------
+ * 404
+ * ---------------------------------------------------------- */
+
 app.use((req, res) => {
-  res.status(404).json({
-    result: "error",
-    error: "Endpoint not found",
-    path: req.path
-  });
+    res.status(404).json({
+        result: "error",
+        error: "Endpoint not found",
+        method: req.method,
+        path: req.path
+    });
 });
 
-// Error handler
+/* ------------------------------------------------------------
+ * Error handler
+ * ---------------------------------------------------------- */
+
 app.use((error, req, res, next) => {
-  console.error(error);
-  res.status(500).json({
-    result: "error",
-    error: "Internal server error"
-  });
+    console.error(error);
+
+    res.status(500).json({
+        result: "error",
+        error: "Internal server error"
+    });
 });
 
-// IMPORTANT for Render:
-// listen on process.env.PORT and 0.0.0.0.
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Tycoon server running on port ${PORT}`);
-});
+/* ------------------------------------------------------------
+ * Render
+ * ---------------------------------------------------------- */
+
+app.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+        console.log(
+            `Tycoon Empire API running on ${PORT}`
+        );
+    }
+);
